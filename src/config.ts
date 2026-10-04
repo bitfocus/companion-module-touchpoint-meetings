@@ -1,4 +1,5 @@
 import { Regex, type SomeCompanionConfigField } from '@companion-module/base'
+import { scriptIntroduction } from './links.js'
 
 export type ModuleConfig = {
 	host: string
@@ -18,11 +19,9 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'static-text',
 			id: 'info',
-			label: 'Setup',
+			label: 'TouchPoint script',
 			width: 12,
-			value:
-				'Install the CompanionMeetings script in TouchPoint as a Python script in Special Content, then enter the credentials of a TouchPoint user ' +
-				'with the "Developer" and "APIOnly" roles. Rooms are chosen in each feedback, so one connection can serve every room.',
+			value: scriptIntroduction(),
 		},
 		{
 			type: 'textinput',

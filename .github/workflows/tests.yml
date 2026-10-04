@@ -1,38 +1,54 @@
 name: Tests
 
+# Runs on every push (to any branch, and for tags), on pull requests, and on request.
 on:
   push:
-    branches:
-      - '**'
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
-    name: Tests
-    runs-on: ubuntu-latest
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows too, because that is where the TouchPoint side is likely to be worked on.
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
+
       - name: Use Node.js 22.x
+        # This should match the version of Node.js defined in the manifest.json runtime field
         uses: actions/setup-node@v4
         with:
           node-version: 22.x
+
+      - name: Use Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
       - name: Prepare Environment
-        run: |
-          corepack enable
+        run: corepack enable
+
       - name: Prepare module
-        run: |
-          yarn install
+        run: yarn install
         env:
-          CI: true
-      - name: Check the embedded script is current
+          # The repository has no lockfile to hold the install to; if one is added, this can be removed.
+          YARN_ENABLE_IMMUTABLE_INSTALLS: 'false'
+
+      - name: Check that the embedded script and recorded versions are current
+        # If this fails, run `yarn embed` and commit the result.
+        if: runner.os == 'Linux'
         run: |
           yarn embed
-          git diff --exit-code src/scriptSource.ts
+          git diff --exit-code src/scriptSource.ts touchpoint/script-version.json
+
       - name: Test the module
-        run: |
-          yarn test
+        run: yarn test
+
       - name: Test the TouchPoint script
-        run: |
-          python3 -m unittest discover -s test/python -v
+        run: python -m unittest discover -s test/python -v
