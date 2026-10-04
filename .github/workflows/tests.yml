@@ -35,10 +35,8 @@ jobs:
         run: corepack enable
 
       - name: Prepare module
+        # CI installs hold to yarn.lock, so it has to be committed along with any change to the dependencies.
         run: yarn install
-        env:
-          # The repository has no lockfile to hold the install to; if one is added, this can be removed.
-          YARN_ENABLE_IMMUTABLE_INSTALLS: 'false'
 
       - name: Check that the embedded script and recorded versions are current
         # If this fails, run `yarn embed` and commit the result.
