@@ -1,22 +1,25 @@
 {
-	"name": "your-module-name",
+	"name": "touchpoint-meetings",
 	"version": "0.1.0",
 	"main": "dist/main.js",
 	"type": "module",
 	"scripts": {
 		"postinstall": "husky",
 		"format": "prettier -w .",
-		"package": "run build && companion-module-build",
-		"build": "rimraf dist && run build:main",
+		"package": "npm run build && companion-module-build",
+		"build": "rimraf dist && npm run embed && npm run build:main",
 		"build:main": "tsc -p tsconfig.build.json",
-		"dev": "tsc -p tsconfig.build.json --watch",
+		"dev": "npm run embed && tsc -p tsconfig.build.json --watch",
 		"lint:raw": "eslint",
-		"lint": "run lint:raw ."
+		"lint": "npm run lint:raw .",
+		"embed": "node scripts/embed-script.mjs",
+		"test": "vitest run",
+		"test:py": "python -m unittest discover -s test/python -v"
 	},
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/bitfocus/companion-module-your-module-name.git"
+		"url": "git+https://github.com/bitfocus/companion-module-touchpoint-meetings.git"
 	},
 	"engines": {
 		"node": "^22.20",
@@ -34,7 +37,8 @@
 		"prettier": "^3.8.3",
 		"rimraf": "^6.1.3",
 		"typescript": "~6.0.3",
-		"typescript-eslint": "^8.59.0"
+		"typescript-eslint": "^8.59.0",
+		"vitest": "^5.0.3"
 	},
 	"prettier": "@companion-module/tools/.prettierrc.json",
 	"lint-staged": {

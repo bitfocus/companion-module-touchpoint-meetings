@@ -2,26 +2,87 @@ import { Regex, type SomeCompanionConfigField } from '@companion-module/base'
 
 export type ModuleConfig = {
 	host: string
-	port: number
+	username: string
+	scriptName: string
+	pollIntervalSeconds: number
+	requestTimeoutMs: number
+	autoUpdateScript: boolean
+}
+
+export type ModuleSecrets = {
+	password?: string
 }
 
 export function GetConfigFields(): SomeCompanionConfigField[] {
 	return [
 		{
+			type: 'static-text',
+			id: 'info',
+			label: 'Setup',
+			width: 12,
+			value:
+				'Install the CompanionMeetings script in TouchPoint as a Python script in Special Content, then enter the credentials of a TouchPoint user ' +
+				'with the "Developer" and "APIOnly" roles. Rooms are chosen in each feedback, so one connection can serve every room.',
+		},
+		{
 			type: 'textinput',
 			id: 'host',
-			label: 'Target IP',
+			label: 'TouchPoint Host',
+			tooltip: 'Host name only, without https://. Example: mychurch.tpsdb.com',
 			width: 8,
-			regex: Regex.IP,
+			default: '',
+			regex: Regex.HOSTNAME,
+		},
+		{
+			type: 'textinput',
+			id: 'scriptName',
+			label: 'Python Script Name',
+			tooltip: 'The name of the script in TouchPoint, which must begin with #API',
+			width: 4,
+			default: 'CompanionMeetings',
+			regex: '/^[A-Za-z0-9_.-]+$/',
+		},
+		{
+			type: 'textinput',
+			id: 'username',
+			label: 'API Username',
+			width: 6,
+			default: '',
+		},
+		{
+			type: 'secret-text',
+			id: 'password',
+			label: 'API Password',
+			width: 6,
+		},
+		{
+			type: 'checkbox',
+			id: 'autoUpdateScript',
+			label: 'Update the TouchPoint script automatically',
+			tooltip:
+				'When this module has a newer version of the script than the one in TouchPoint, install it over the old one. Requires the script to already be installed once.',
+			width: 12,
+			default: true,
 		},
 		{
 			type: 'number',
-			id: 'port',
-			label: 'Target Port',
-			width: 4,
-			min: 1,
-			max: 65535,
-			default: 8000,
+			id: 'pollIntervalSeconds',
+			label: 'Refresh Interval (seconds)',
+			tooltip:
+				'How often reservations are re-read from TouchPoint. Start and end times are applied to the second between refreshes.',
+			width: 6,
+			min: 10,
+			max: 600,
+			default: 30,
+		},
+		{
+			type: 'number',
+			id: 'requestTimeoutMs',
+			label: 'Request Timeout (ms)',
+			width: 6,
+			min: 1000,
+			max: 60000,
+			default: 10000,
 		},
 	]
 }

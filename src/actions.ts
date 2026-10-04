@@ -1,29 +1,17 @@
 import type ModuleInstance from './main.js'
 
 export type ActionsSchema = {
-	sample_action: {
-		options: {
-			num: number
-		}
-	}
+	refresh: { options: Record<string, never> }
 }
 
 export function UpdateActions(self: ModuleInstance): void {
 	self.setActionDefinitions({
-		sample_action: {
-			name: 'My First Action',
-			options: [
-				{
-					id: 'num',
-					type: 'number',
-					label: 'Test',
-					default: 5,
-					min: 0,
-					max: 100,
-				},
-			],
-			callback: async (event) => {
-				console.log('Hello world!', event.options.num)
+		refresh: {
+			name: 'Refresh from TouchPoint',
+			description: 'Reload the room list and reservations now, rather than waiting for the next refresh.',
+			options: [],
+			callback: async () => {
+				await self.refreshNow()
 			},
 		},
 	})
