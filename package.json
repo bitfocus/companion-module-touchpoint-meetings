@@ -46,7 +46,7 @@
 			"prettier --write"
 		],
 		"*.{ts,tsx,js,jsx}": [
-			"yarn lint:raw --fix"
+			"eslint --fix"
 		]
 	},
 	"packageManager": "yarn@4.17.0"
