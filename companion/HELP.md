@@ -4,7 +4,7 @@ Lets Companion react to room reservations in TouchPoint. For any room, you can k
 
 ### Setting up TouchPoint
 
-1. Install the `CompanionMeetings` Python script in TouchPoint as a Python script in Special Content. It is part of [TouchPointScripts](https://github.com/TenthPres/TouchPointScripts), in the `Calendar` folder. Its first line must be `#API`.
+1. Install the `CompanionMeetings` Python script in TouchPoint, as a Python script in Special Content. Copy it from [touchpoint/CompanionMeetings.py](https://github.com/bitfocus/companion-module-touchpoint-meetings/blob/main/touchpoint/CompanionMeetings.py) in this module's repository. Its first line must be `#API`. This is the only time you install it by hand: after that, the module keeps it up to date.
 2. Create a TouchPoint user for Companion with the **Developer** and **APIOnly** roles. A dedicated user is strongly recommended.
 
 ### Connection settings
@@ -12,6 +12,7 @@ Lets Companion react to room reservations in TouchPoint. For any room, you can k
 - **TouchPoint Host**: host name only, such as `mychurch.tpsdb.com`.
 - **Python Script Name**: `CompanionMeetings`, unless you renamed it.
 - **API Username / Password**: the user created above.
+- **Update the TouchPoint script automatically**: on by default. See _Keeping the script up to date_ below.
 - **Refresh Interval**: how often reservations are re-read. Start and end times are applied to the second in between, so a short interval is only needed to pick up reservations that were just changed.
 
 You only need one connection, however many rooms you use. Rooms are chosen in each feedback.
@@ -46,6 +47,14 @@ If TouchPoint becomes unreachable, the last known reservations stay in effect, s
 ### Actions
 
 - **Refresh from TouchPoint**: reload the room list and reservations now.
+
+### Keeping the script up to date
+
+The module carries a copy of the script and checks the version of the one in TouchPoint each time it refreshes. When the module's copy is newer, it installs it over the old one, so updating the module updates the script too. A script that is already newer than the module's is left alone.
+
+This replaces the script named in **Python Script Name**, using the connection's own user. If you would rather install updates yourself, turn off **Update the TouchPoint script automatically**; the connection then reports when the script is out of date.
+
+If the connection says the script is out of date and could not be updated automatically, the installed script is probably from before automatic updates existed. Copy the current script into TouchPoint by hand, as in _Setting up TouchPoint_. The connection recovers by itself afterward.
 
 ### Notes
 

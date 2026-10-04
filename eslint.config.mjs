@@ -11,6 +11,8 @@ export default [
 		files: ['src/**/__tests__/**/*.ts', 'src/**/*.spec.ts'],
 		rules: {
 			'n/no-unpublished-import': 'off',
+			// vi.mocked(instance.method) reads a method without calling it, which is what mocks are for.
+			'@typescript-eslint/unbound-method': 'off',
 		},
 	},
 ]
