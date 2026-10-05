@@ -5,7 +5,7 @@
 	"name": "touchpoint-meetings",
 	"shortname": "TouchPoint",
 	"description": "Room reservation setup, event, and teardown status from TouchPoint",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"license": "MIT",
 	"repository": "git+https://github.com/bitfocus/companion-module-touchpoint-meetings.git",
 	"bugs": "https://github.com/bitfocus/companion-module-touchpoint-meetings/issues",

@@ -32,7 +32,7 @@ global model, Data, q
 # new version of one is a new version of the other.  `npm run embed` in the module's repository sets this from the
 # module's package.json, so don't change it by hand.  The module installs its copy of this script, replacing this one,
 # when its version is higher than this.
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 SCRIPT_KEYWORD = "Companion"  # categorizes the script in Special Content.
 MAX_SCRIPT_LENGTH = 200000
 
