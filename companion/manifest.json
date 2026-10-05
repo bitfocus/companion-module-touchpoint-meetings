@@ -11,8 +11,8 @@
 	"bugs": "https://github.com/bitfocus/companion-module-touchpoint-meetings/issues",
 	"maintainers": [
 		{
-			"name": "TouchPoint Companion Contributors",
-			"email": "opensource@bitfocus.io"
+			"name": "James Kurtz",
+			"email": "jkrrv@jkrrv.org"
 		}
 	],
 	"runtime": {
