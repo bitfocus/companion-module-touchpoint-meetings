@@ -1,28 +1,53 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { compareVersions, parseVersion } from '../version.js'
 
+// These cases are shared with the tests of the TouchPoint script, which compares versions for itself. The script and
+// the module have to agree about which of two versions is newer, so both are held to the same list.
+const cases = JSON.parse(
+	readFileSync(new URL('../../test/fixtures/version-comparisons.json', import.meta.url), 'utf8'),
+) as {
+	valid: string[]
+	invalid: string[]
+	comparisons: [string, string, -1 | 0 | 1][]
+}
+
 describe('parseVersion', () => {
-	it('reads dotted numbers', () => {
-		expect(parseVersion('1.0.0')).toEqual([1, 0, 0])
-		expect(parseVersion('2')).toEqual([2])
-		expect(parseVersion('10.20')).toEqual([10, 20])
+	it.each(cases.valid)('reads %s', (text) => {
+		expect(parseVersion(text)).toBeDefined()
 	})
 
-	it('rejects anything else', () => {
-		for (const bad of ['', '1.', '.1', '1..2', 'v1.0', '1.0-beta', 'one', undefined, null, 1.5]) {
-			expect(parseVersion(bad)).toBeUndefined()
-		}
+	it.each(cases.invalid)('rejects %j', (text) => {
+		expect(parseVersion(text)).toBeUndefined()
+	})
+
+	it('rejects what is not text', () => {
+		for (const bad of [undefined, null, 1, 1.5, {}, ['1.2.3']]) expect(parseVersion(bad)).toBeUndefined()
+	})
+
+	it('reads the parts', () => {
+		expect(parseVersion('10.20.30')).toEqual({ core: [10, 20, 30], prerelease: undefined })
+		expect(parseVersion('1.2.3-beta.1+build')).toEqual({ core: [1, 2, 3], prerelease: ['beta', '1'] })
 	})
 })
 
 describe('compareVersions', () => {
-	it('compares numerically, not as text', () => {
-		expect(compareVersions([1, 0, 10], [1, 0, 9])).toBeGreaterThan(0)
-		expect(compareVersions([1, 9], [1, 10])).toBeLessThan(0)
+	it.each(cases.comparisons)('%s against %s is %i', (a, b, expected) => {
+		expect(Math.sign(compareVersions(parseVersion(a)!, parseVersion(b)!))).toBe(expected)
 	})
 
-	it('treats missing parts as zero', () => {
-		expect(compareVersions([1, 0], [1, 0, 0])).toBe(0)
-		expect(compareVersions([1], [1, 0, 1])).toBeLessThan(0)
+	it('puts the semantic versioning specification’s own example in order', () => {
+		const inOrder = [
+			'1.0.0-alpha',
+			'1.0.0-alpha.1',
+			'1.0.0-alpha.beta',
+			'1.0.0-beta',
+			'1.0.0-beta.2',
+			'1.0.0-beta.11',
+			'1.0.0-rc.1',
+			'1.0.0',
+		]
+		const shuffled = [...inOrder].reverse()
+		expect(shuffled.sort((a, b) => compareVersions(parseVersion(a)!, parseVersion(b)!))).toEqual(inOrder)
 	})
 })

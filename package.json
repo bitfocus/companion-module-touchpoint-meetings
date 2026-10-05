@@ -13,6 +13,9 @@
 		"lint:raw": "eslint",
 		"lint": "npm run lint:raw .",
 		"embed": "node scripts/embed-script.mjs",
+		"version:set": "node scripts/set-version.mjs",
+		"release": "node scripts/release.mjs",
+		"release:tag": "node scripts/tag-release.mjs",
 		"test": "vitest run",
 		"test:py": "python -m unittest discover -s test/python -v"
 	},

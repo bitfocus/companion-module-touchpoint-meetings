@@ -71,7 +71,7 @@ function client(overrides: Partial<ConstructorParameters<typeof TouchPointClient
 		scriptName: 'CompanionMeetings',
 		requestTimeoutMs: 3000,
 		baseUrl,
-		expectedScriptVersion: '1.2.0',
+		moduleVersion: '1.2.0',
 		scriptSource: '#API\nVERSION = "1.2.0"\n# updateScript\n',
 		...overrides,
 	})
@@ -281,21 +281,50 @@ describe('failures', () => {
 })
 
 describe('the version of the script in TouchPoint', () => {
+	// The module and the script are one thing with one version. Here the module is version 1.2.0.
 	const deployed = (scriptVersion?: string) => {
 		reply = () => envelope({ ok: true, scriptVersion, rooms: [] })
 	}
 
-	it.each(['1.2.0', '1.2.1', '1.10.0', '2.0'])('is fine at %s, which is current or newer', async (version) => {
-		deployed(version)
-		await expect(client().getRooms()).resolves.toBeDefined()
+	it('is fine when it is the module’s version', async () => {
+		deployed('1.2.0')
+		const c = client()
+		await expect(c.getRooms()).resolves.toBeDefined()
+		expect(c.newerScriptVersion).toBeUndefined()
 	})
 
-	it.each(['1.1.9', '1.2', '0.9', '1.1.99'])('is out of date at %s', async (version) => {
-		deployed(version)
+	it.each(['1.2.1', '1.3.0', '1.10.0', '2.0.0', '1.3.0-beta.1'])(
+		'is left alone, and noted, when it is newer: %s',
+		async (version) => {
+			deployed(version)
+			const c = client()
+			await expect(c.getRooms()).resolves.toBeDefined()
+			expect(c.newerScriptVersion).toBe(version)
+		},
+	)
 
-		const error = await failureOf(client({ expectedScriptVersion: version === '1.2' ? '1.2.1' : '1.2.0' }).getRooms())
-		expect(error.kind).toBe('outdated')
-		expect(error.deployedVersion).toBe(version)
+	it.each(['1.1.9', '1.1.99', '1.0.0', '0.9.0', '1.2.0-rc.1', '1.2.0-0'])(
+		'is out of date when it is older: %s',
+		async (version) => {
+			deployed(version)
+
+			const error = await failureOf(client().getRooms())
+			expect(error.kind).toBe('outdated')
+			expect(error.deployedVersion).toBe(version)
+			expect(error.message).toContain(`version ${version}`)
+			expect(error.message).toContain('this module is version 1.2.0')
+		},
+	)
+
+	it('follows semantic versioning for a module that is itself a pre-release', async () => {
+		deployed('1.3.0-beta.1')
+		await expect(client({ moduleVersion: '1.3.0-beta.1' }).getRooms()).resolves.toBeDefined()
+
+		deployed('1.3.0-beta.1')
+		expect((await failureOf(client({ moduleVersion: '1.3.0-beta.2' }).getRooms())).kind).toBe('outdated')
+
+		deployed('1.3.0')
+		await expect(client({ moduleVersion: '1.3.0-beta.2' }).getRooms()).resolves.toBeDefined() // the release is newer
 	})
 
 	it('is out of date when it is too old to report a version at all', async () => {
@@ -306,8 +335,8 @@ describe('the version of the script in TouchPoint', () => {
 		expect(error.message).toContain('too old to report a version')
 	})
 
-	it('is out of date when the version is nonsense', async () => {
-		deployed('latest')
+	it.each(['latest', '1.2', '1', 'v1.2.0'])('is out of date when the version is not a version: %s', async (version) => {
+		deployed(version)
 		expect((await failureOf(client().getRooms())).kind).toBe('outdated')
 	})
 

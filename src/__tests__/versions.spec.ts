@@ -1,12 +1,13 @@
-import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { MODULE_VERSION, REPOSITORY_URL, SCRIPT_PATH, SCRIPT_SOURCE, SCRIPT_VERSION } from '../scriptSource.js'
+import { MODULE_VERSION, REPOSITORY_URL, SCRIPT_PATH, SCRIPT_SOURCE } from '../scriptSource.js'
 import { parseVersion } from '../version.js'
 
 // The module is made of several things that each carry a version or an address, and have to agree: the package and the
 // manifest, the TouchPoint script and its copy inside the module, the tag that the settings link to, CI, and the docs.
-// These tests are what keep them in step. When one fails, the message says what to change.
+// The module and the TouchPoint script are one thing with one version, the package's: they are released together, so
+// a new version of one is a new version of the other. These tests are what keep everything in step. When one fails,
+// the message says what to change.
 
 const root = new URL('../../', import.meta.url)
 const read = (path: string) => readFileSync(new URL(path, root), 'utf8').replace(/\r\n/g, '\n')
@@ -15,7 +16,7 @@ const json = (path: string) => JSON.parse(read(path)) as Record<string, any>
 const packageJson = json('package.json')
 const manifest = json('companion/manifest.json')
 const script = read(SCRIPT_PATH)
-const scriptVersion = /^VERSION = "([0-9.]+)"/m.exec(script)?.[1]
+const scriptVersion = /^VERSION = "([^"]+)"/m.exec(script)?.[1]
 
 const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/
 const repositoryAddress = (url: string) => url.replace(/^git\+/, '').replace(/\.git$/, '')
@@ -28,6 +29,11 @@ const workflows = ['node.yaml', 'tests.yml', 'build.yml'].map((name) => ({
 describe('the module’s version', () => {
 	it('is a version number', () => {
 		expect(packageJson.version).toMatch(SEMVER)
+	})
+
+	it('is one that the module and the TouchPoint script can compare', () => {
+		// The script is only updated to a version that is newer, so both have to understand this one.
+		expect(parseVersion(packageJson.version)).toBeDefined()
 	})
 
 	it('is the same in package.json and companion/manifest.json', () => {
@@ -46,41 +52,47 @@ describe('the module’s version', () => {
 		const pattern = new RegExp('^' + filter!.replace(/\./g, '\\.').replace(/\*/g, '[^/]*') + '$')
 		expect(`v${MODULE_VERSION}`).toMatch(pattern)
 	})
+
+	// Bitfocus's release checks compare the tag against package.json, so the version has to be in the commit that gets
+	// tagged. `yarn release` sets it, and `yarn release:tag` makes the tag from it. This catches a tag made any other way
+	// (such as in GitHub's "create release" page, from a commit that didn't have the version bumped), with the fix.
+	it.runIf(process.env.GITHUB_REF_TYPE === 'tag')('is the version of the tag being built', () => {
+		expect(
+			process.env.GITHUB_REF_NAME,
+			`This tag doesn't match the version in package.json (${packageJson.version}). Tags have to be made from a commit ` +
+				'that already has its version: use `yarn release <version>`, merge it, then `yarn release:tag`. ' +
+				'Delete this tag (git push --delete origin <tag>) once it is safe to, before making the right one.',
+		).toBe(`v${packageJson.version}`)
+	})
+
+	it('is checked on tag pushes, by the tests workflow', () => {
+		// "push:" with no branch filter runs for every push, tags included.
+		const trigger = /^on:\s*\n([\s\S]*?)^jobs:/m.exec(read('.github/workflows/tests.yml'))?.[1] ?? ''
+		expect(trigger).toMatch(/^ {2}push:\s*$/m)
+		expect(trigger).not.toMatch(/branches|tags-ignore/)
+	})
 })
 
 describe('the TouchPoint script’s version', () => {
-	it('is a dotted number, because that is all the script itself accepts', () => {
-		expect(scriptVersion).toBeDefined()
-		expect(parseVersion(scriptVersion)).toBeDefined()
+	it('is the module’s version: they are one thing, with one version (run `npm run embed`)', () => {
+		expect(scriptVersion).toBe(packageJson.version)
 	})
 
 	it('is the one in the copy embedded in the module (run `npm run embed`)', () => {
-		expect(SCRIPT_VERSION).toBe(scriptVersion)
 		expect(SCRIPT_SOURCE).toBe(script)
-		expect(SCRIPT_SOURCE).toContain(`VERSION = "${SCRIPT_VERSION}"`)
+		expect(SCRIPT_SOURCE).toContain(`VERSION = "${MODULE_VERSION}"`)
 	})
 
-	it('is the one in the result the script’s tests and the client’s tests share', () => {
-		expect(json('test/fixtures/windows-result.json').scriptVersion).toBe(scriptVersion)
-	})
-
-	describe('when the script changes', () => {
-		// Installed copies only update to a higher version, so a change that keeps the version never reaches anyone.
-		const lock = json('touchpoint/script-version.json')
-		const sha256 = createHash('sha256').update(script).digest('hex')
-
-		it('has been raised, with `npm run embed` run afterwards', () => {
-			expect(
-				lock,
-				`touchpoint/CompanionMeetings.py changed without raising its VERSION (still ${scriptVersion}). ` +
-					'Raise VERSION, then run `npm run embed`.',
-			).toEqual({ version: scriptVersion, sha256 })
-		})
-	})
-
-	it('runs the module’s package build, which embeds the script', () => {
+	it('is set by the module’s build, which embeds the script', () => {
 		expect(packageJson.scripts.build).toContain('npm run embed')
 		expect(packageJson.scripts.dev).toContain('npm run embed')
+	})
+
+	it('is checked for being out of date in CI, which fails if `npm run embed` would change anything', () => {
+		const tests = read('.github/workflows/tests.yml')
+		const check = /yarn embed\s+git diff --exit-code ([^\n]+)/.exec(tests)?.[1] ?? ''
+		expect(check).toContain('src/scriptSource.ts')
+		expect(check).toContain(SCRIPT_PATH)
 	})
 })
 

@@ -1,4 +1,4 @@
-import { SCRIPT_SOURCE, SCRIPT_VERSION } from './scriptSource.js'
+import { MODULE_VERSION, SCRIPT_SOURCE } from './scriptSource.js'
 import type { Room, RoomWindow, ServerClock } from './types.js'
 import { compareVersions, parseVersion } from './version.js'
 
@@ -10,8 +10,8 @@ export type TouchPointClientOptions = {
 	requestTimeoutMs: number
 	/** Where TouchPoint is. Defaults to https://{host}; different only for testing. */
 	baseUrl?: string
-	/** The script version this module needs, and the script it installs to get it. Different only for testing. */
-	expectedScriptVersion?: string
+	/** This module's version, which is also the version of the script it needs, and the script it installs to get it. Different only for testing. */
+	moduleVersion?: string
 	scriptSource?: string
 }
 
@@ -33,7 +33,7 @@ export class TouchPointClient {
 	private readonly url: string
 	private readonly authorization: string
 	private readonly requestTimeoutMs: number
-	private readonly expectedScriptVersion: string
+	private readonly moduleVersion: string
 	private readonly scriptSource: string
 
 	constructor(options: TouchPointClientOptions) {
@@ -44,7 +44,7 @@ export class TouchPointClient {
 		this.url = `${options.baseUrl ?? `https://${host}`}/PythonAPI/${encodeURIComponent(options.scriptName.trim())}`
 		this.authorization = 'Basic ' + Buffer.from(`${options.username}:${options.password}`).toString('base64')
 		this.requestTimeoutMs = Math.max(1000, options.requestTimeoutMs)
-		this.expectedScriptVersion = options.expectedScriptVersion ?? SCRIPT_VERSION
+		this.moduleVersion = options.moduleVersion ?? MODULE_VERSION
 		this.scriptSource = options.scriptSource ?? SCRIPT_SOURCE
 	}
 
@@ -180,17 +180,30 @@ export class TouchPointClient {
 		return parsed
 	}
 
-	/** The script is out of date if it's older than this module needs, or too old to report a version at all. */
+	/**
+	 * The version of the script in TouchPoint, when it is newer than this module. That is left alone, but worth saying:
+	 * the script and module are released together, so a newer script means that this module is out of date.
+	 */
+	newerScriptVersion: string | undefined
+
+	/**
+	 * The module and the script are one thing with one version, so the script must be the module's version or newer.
+	 * It is out of date if it is older, or too old to report a version at all.
+	 */
 	private checkScriptVersion(result: Record<string, unknown>): void {
 		const deployed = text(result.scriptVersion, '')
-		const parsed = parseVersion(deployed)
-		if (!parsed || compareVersions(parsed, parseVersion(this.expectedScriptVersion) ?? []) < 0) {
+		const deployedVersion = parseVersion(deployed)
+		const expected = parseVersion(this.moduleVersion)
+		const comparison = deployedVersion && expected ? compareVersions(deployedVersion, expected) : -1
+
+		if (comparison < 0) {
 			throw new TouchPointError(
-				`The TouchPoint script is out of date (it is ${deployed ? `version ${deployed}` : 'too old to report a version'}; this module needs ${this.expectedScriptVersion}).`,
+				`The TouchPoint script is out of date (it is ${deployed ? `version ${deployed}` : 'too old to report a version'}; this module is version ${this.moduleVersion}, and needs the script to match).`,
 				'outdated',
 				deployed,
 			)
 		}
+		this.newerScriptVersion = comparison > 0 ? deployed : undefined
 	}
 }
 

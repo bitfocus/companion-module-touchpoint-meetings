@@ -26,6 +26,19 @@ def read_script():
         return f.read()
 
 
+def script_version():
+    """The VERSION the script declares, which is the version of the module that carries it."""
+    import re
+    return re.search(r'^VERSION = "([^"]+)"', read_script(), re.MULTILINE).group(1)
+
+
+def with_version(version, source=None):
+    """The script, as it would be if its VERSION were different."""
+    import re
+    source = source if source is not None else read_script()
+    return re.sub(r'^VERSION = "[^"]*"$', 'VERSION = "{}"'.format(version), source, flags=re.MULTILINE)
+
+
 class FakeDateTime(object):
     """A .NET DateTime, as far as the script uses it."""
 
@@ -123,12 +136,13 @@ class Row(object):
 
 
 class Run(object):
-    def __init__(self, data, model, q, printed, source):
+    def __init__(self, data, model, q, printed, source, namespace):
         self.data = data
         self.model = model
         self.q = q
         self.printed = printed
         self.source = source
+        self.namespace = namespace  # what the script defined, such as its functions
 
     @property
     def result(self):
@@ -147,5 +161,6 @@ def run_script(parameters=None, method="get", script_name="CompanionMeetings", s
 
     printed = io.StringIO()
     with contextlib.redirect_stdout(printed):
-        exec(compile(source, "CompanionMeetings.py", "exec"), {"model": model, "Data": data, "q": q})
-    return Run(data, model, q, printed.getvalue(), source)
+        namespace = {"model": model, "Data": data, "q": q}
+        exec(compile(source, "CompanionMeetings.py", "exec"), namespace)
+    return Run(data, model, q, printed.getvalue(), source, namespace)

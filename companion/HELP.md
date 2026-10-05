@@ -17,7 +17,7 @@ You install the script in TouchPoint once, by hand. After that the module keeps 
 
 Cancelled meetings are left out. The script does not look at people, attendance, giving, or anything else, and it never changes your data. The only thing it ever writes is itself, when it is updated.
 
-**Where it comes from.** It is in this module's repository, at [touchpoint/CompanionMeetings.py](https://github.com/bitfocus/companion-module-touchpoint-meetings/blob/main/touchpoint/CompanionMeetings.py). Each release of the module is tagged in the repository, and the copy of the script at that tag is the one that goes with that release. **The connection's settings link to exactly that copy**, and say which version of the script it is, so you never have to guess.
+**Where it comes from.** It is in this module's repository, at [touchpoint/CompanionMeetings.py](https://github.com/bitfocus/companion-module-touchpoint-meetings/blob/main/touchpoint/CompanionMeetings.py). Each release of the module is tagged in the repository, and the copy of the script at that tag is the one that goes with that release. **The connection's settings link to exactly that copy**, so you never have to work out which one you need.
 
 **What it needs.**
 
@@ -37,11 +37,11 @@ This is the only time you need to install it by hand.
 
 #### Keeping it up to date
 
-The module carries a copy of the script. Each time it refreshes, it checks the version of the script in TouchPoint, and:
+The module and the script are one thing, with one version: they are released together, so a new version of the module is a new version of the script, and the other way around. The module carries a copy of the script and checks the version of the one in TouchPoint each time it refreshes:
 
-- if the script in TouchPoint is **older** than the module's copy, the module installs its copy over it, and carries on. Updating the module therefore updates the script too, with nothing else to do.
+- if the script in TouchPoint is **older** than the module, the module installs its copy over it, and carries on. Updating the module therefore updates the script too, with nothing else to do.
 - if it is the **same** version, nothing happens.
-- if it is **newer** than the module's copy (for example, the module wasn't updated as recently as the script), it is left alone.
+- if it is **newer** than the module (for example, another Companion with a more recent module also uses this TouchPoint), it is left alone, and the connection's log says once that the module is behind and should be updated.
 
 How it is done: the module sends its copy to the installed script, which replaces itself. The script accepts that only from a user who can call it at all (the Developer and APIOnly user), and refuses a copy that isn't newer, doesn't begin with `#API`, or couldn't be updated itself again. Only the script named in **Python Script Name** is touched.
 
@@ -49,9 +49,9 @@ If the update fails (for instance, the script in TouchPoint is so old that it ca
 
 If you would rather control when the script changes, for example because TouchPoint changes are reviewed, turn off **Update the TouchPoint script automatically**. The connection then reports when the script is out of date, and you install the new version by hand using the link in the settings.
 
-#### Versions
+#### Which version is which
 
-The module and the script have separate version numbers. The script's changes only when the script changes, so many module releases can carry the same script. What matters to you is the link in the connection's settings: it is always the script that goes with the module you have installed.
+There is only one version number to think about: the module's. The script in TouchPoint should have the same one, and the link in the connection's settings is always the script for the module you have installed, so you never have to match them up yourself. The script says which version it is on its own page (step 5 above), so you can see at a glance whether TouchPoint has the one you expect.
 
 ### Connection settings
 

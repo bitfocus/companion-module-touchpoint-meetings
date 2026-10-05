@@ -1,82 +1,77 @@
-// Prepares what the module needs to know about itself and the TouchPoint script it keeps installed:
+// Prepares what the module needs to know about itself and the TouchPoint script it keeps installed.
 //
-// - src/scriptSource.ts: a copy of touchpoint/CompanionMeetings.py, so the module carries the script whether it runs
-//   from dist/ in development or from a packaged build, plus the versions and repository address used to link to the
-//   script that matches this module.
-// - touchpoint/script-version.json: the script's version and a hash of its content, as of the last time this ran.
-//   Installed copies only update to a *higher* version, so changing the script without raising its VERSION would
-//   silently never reach anyone.  Here, that is an error instead.
+// The module and the script are one thing with one version, the `version` in package.json: they are released together,
+// so a new version of one is a new version of the other. (That version is stamped in from the release's git tag by
+// set-version.mjs; see there.) This:
 //
-// Run by `npm run build`; run `npm run embed` after editing the script, or changing the module's version.  Tests fail
-// if the generated files and their sources disagree.
-import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+// - writes that version into touchpoint/CompanionMeetings.py, as its VERSION, so the script always says which release
+//   it is part of, and
+// - writes src/scriptSource.ts: a copy of the script, so the module carries it whether it runs from dist/ in
+//   development or from a packaged build, plus the version and repository address that the link to the matching
+//   script is made from.
+//
+// Run by `npm run build`; run `npm run embed` after editing the script. Tests fail if the files this writes and their
+// sources disagree.
+import { readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const root = new URL('../', import.meta.url)
-const SCRIPT_PATH = 'touchpoint/CompanionMeetings.py'
-const LOCK_PATH = 'touchpoint/script-version.json'
+export const SCRIPT_PATH = 'touchpoint/CompanionMeetings.py'
 
-const read = (path) => readFileSync(new URL(path, root), 'utf8').replace(/\r\n/g, '\n')
-const write = (path, content) => writeFileSync(fileURLToPath(new URL(path, root)), content)
+/** Does the work, in the project at `rootDirectory` (the repository, unless testing). */
+export function embed(rootDirectory) {
+	const file = (relativePath) => path.join(rootDirectory, relativePath)
+	const read = (relativePath) => readFileSync(file(relativePath), 'utf8').replace(/\r\n/g, '\n')
 
-const source = read(SCRIPT_PATH)
-const packageJson = JSON.parse(read('package.json'))
-
-const scriptVersion = /^VERSION = "([0-9.]+)"/m.exec(source)?.[1]
-if (!scriptVersion) throw new Error(`${SCRIPT_PATH} has no VERSION`)
-
-const repositoryUrl = String(packageJson.repository?.url ?? '')
-	.replace(/^git\+/, '')
-	.replace(/\.git$/, '')
-if (!/^https:\/\/github\.com\/[^/]+\/[^/]+$/.test(repositoryUrl)) {
-	throw new Error(`package.json repository.url is not a GitHub repository address: ${repositoryUrl}`)
-}
-
-const sha256 = createHash('sha256').update(source).digest('hex')
-
-const compareVersions = (a, b) => {
-	const [x, y] = [a, b].map((v) => v.split('.').map(Number))
-	for (let i = 0; i < Math.max(x.length, y.length); i++) {
-		const difference = (x[i] ?? 0) - (y[i] ?? 0)
-		if (difference !== 0) return difference
+	const packageJson = JSON.parse(read('package.json'))
+	const version = String(packageJson.version)
+	if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/.test(version)) {
+		throw new Error(`package.json's version, "${version}", is not a version like 1.2.3 or 1.2.3-beta.1`)
 	}
-	return 0
-}
 
-if (existsSync(new URL(LOCK_PATH, root))) {
-	const lock = JSON.parse(read(LOCK_PATH))
-	if (compareVersions(scriptVersion, lock.version) < 0) {
-		throw new Error(`${SCRIPT_PATH}'s VERSION went down, from ${lock.version} to ${scriptVersion}.`)
+	const repositoryUrl = String(packageJson.repository?.url ?? '')
+		.replace(/^git\+/, '')
+		.replace(/\.git$/, '')
+	if (!/^https:\/\/github\.com\/[^/]+\/[^/]+$/.test(repositoryUrl)) {
+		throw new Error(`package.json repository.url is not a GitHub repository address: ${repositoryUrl}`)
 	}
-	if (scriptVersion === lock.version && sha256 !== lock.sha256) {
-		throw new Error(
-			`${SCRIPT_PATH} has changed, but its VERSION is still ${scriptVersion}.\n` +
-				'Raise VERSION: installed copies only update to a higher version, so this change would never reach them.',
-		)
-	}
-}
 
-write(LOCK_PATH, JSON.stringify({ version: scriptVersion, sha256 }, null, '\t') + '\n')
+	const versionLine = /^VERSION = "[^"]*"$/m
+	let source = read(SCRIPT_PATH)
+	if (!versionLine.test(source)) throw new Error(`${SCRIPT_PATH} has no VERSION line`)
+	source = source.replace(versionLine, `VERSION = "${version}"`)
+	writeFileSync(file(SCRIPT_PATH), source)
 
-write(
-	'src/scriptSource.ts',
-	`// Generated by scripts/embed-script.mjs. Do not edit; run \`npm run embed\`.
+	writeFileSync(
+		file('src/scriptSource.ts'),
+		`// Generated by scripts/embed-script.mjs. Do not edit; run \`npm run embed\`.
 
 /** Where the script is, in the repository. */
 export const SCRIPT_PATH = ${JSON.stringify(SCRIPT_PATH)}
 
-/** The version of the script that this module carries, and installs in TouchPoint if what's there is older. */
-export const SCRIPT_VERSION = ${JSON.stringify(scriptVersion)}
-
-/** The version of this module. A tag with this name (v + the version) is how the matching script is found. */
-export const MODULE_VERSION = ${JSON.stringify(packageJson.version)}
+/**
+ * The version of this module, which is also the version of the script it carries and installs in TouchPoint.
+ * A release with this version, tagged v + the version, has the matching script attached to it.
+ */
+export const MODULE_VERSION = ${JSON.stringify(version)}
 
 /** The GitHub repository this module is published from. */
 export const REPOSITORY_URL = ${JSON.stringify(repositoryUrl)}
 
 export const SCRIPT_SOURCE = ${JSON.stringify(source)}
 `,
-)
+	)
 
-console.log(`Embedded ${SCRIPT_PATH} version ${scriptVersion}, for module version ${packageJson.version}`)
+	return { version, scriptPath: SCRIPT_PATH }
+}
+
+/** The project to work in: `--root <directory>` if given (for testing), otherwise this repository. */
+export function projectRoot(argv) {
+	const flag = argv.indexOf('--root')
+	return flag >= 0 ? path.resolve(argv[flag + 1]) : fileURLToPath(new URL('../', import.meta.url))
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+	const { version } = embed(projectRoot(process.argv))
+	console.log(`Embedded ${SCRIPT_PATH}, as version ${version}`)
+}

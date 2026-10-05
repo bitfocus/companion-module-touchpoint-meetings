@@ -38,12 +38,12 @@ jobs:
         # CI installs hold to yarn.lock, so it has to be committed along with any change to the dependencies.
         run: yarn install
 
-      - name: Check that the embedded script and recorded versions are current
+      - name: Check that the script's version and its embedded copy are current
         # If this fails, run `yarn embed` and commit the result.
         if: runner.os == 'Linux'
         run: |
           yarn embed
-          git diff --exit-code src/scriptSource.ts touchpoint/script-version.json
+          git diff --exit-code src/scriptSource.ts touchpoint/CompanionMeetings.py
 
       - name: Test the module
         run: yarn test

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ModuleConfig } from '../config.js'
 import ModuleInstance from '../main.js'
-import { SCRIPT_SOURCE, SCRIPT_VERSION } from '../scriptSource.js'
+import { MODULE_VERSION, SCRIPT_SOURCE } from '../scriptSource.js'
 import type { RoomWatch } from '../types.js'
 
 // Companion's base class does nothing useful outside Companion, so it is replaced with one that records what the
@@ -32,6 +32,7 @@ vi.mock('@companion-module/base', () => {
 })
 
 const MIN = 60_000
+const OLDER_SCRIPT = '0.0.1' // older than any real version of the module
 const NOW = Date.UTC(2026, 9, 4, 21, 30) // 17:30 in the church's time zone, which is UTC-4 in the tests
 const UTC_OFFSET_MINUTES = -240
 
@@ -65,7 +66,7 @@ const touchpoint = {
 	requests: [] as { a: string; url: string; params: URLSearchParams }[],
 
 	reset() {
-		this.deployedVersion = SCRIPT_VERSION
+		this.deployedVersion = MODULE_VERSION
 		this.canUpdateItself = true
 		this.status = 200
 		this.unreachable = false
@@ -95,8 +96,8 @@ const touchpoint = {
 		if (a === 'updateScript') {
 			if (!this.canUpdateItself) return reply({ ok: false, error: 'unknown action' })
 			const updatedFrom = this.deployedVersion
-			this.deployedVersion = SCRIPT_VERSION
-			return reply({ ok: true, scriptVersion: SCRIPT_VERSION, updatedFrom, updatedTo: SCRIPT_VERSION })
+			this.deployedVersion = MODULE_VERSION
+			return reply({ ok: true, scriptVersion: MODULE_VERSION, updatedFrom, updatedTo: MODULE_VERSION })
 		}
 		if (a === 'rooms') {
 			return reply({ ok: true, ...version, rooms: this.rooms.map((r) => ({ ...r, typeId: 1, reservable: true })) })
@@ -428,13 +429,13 @@ describe('the meeting name', () => {
 
 describe('keeping the script in TouchPoint up to date', () => {
 	it('installs this module’s copy over an older one, then carries on', async () => {
-		touchpoint.deployedVersion = '0.5.0'
+		touchpoint.deployedVersion = OLDER_SCRIPT
 		const instance = await start()
 
 		expect(touchpoint.requests.map((r) => r.a)).toEqual(['rooms', 'updateScript', 'rooms'])
 		expect(touchpoint.requests[1].params.get('content')).toBe(SCRIPT_SOURCE)
 		expect(lastStatus(instance)).toEqual(['ok'])
-		expect(logged(instance, 'info')).toEqual([`Updated the TouchPoint script from version 0.5.0 to ${SCRIPT_VERSION}`])
+		expect(logged(instance, 'info')).toEqual([`Updated the TouchPoint script from version 0.0.1 to ${MODULE_VERSION}`])
 		expect(vi.mocked(instance.setVariableValues).mock.calls.at(-1)?.[0]).toMatchObject({ rooms_loaded: '2' })
 	})
 
@@ -446,21 +447,49 @@ describe('keeping the script in TouchPoint up to date', () => {
 		expect(lastStatus(instance)).toEqual(['ok'])
 	})
 
-	it('leaves a newer script alone', async () => {
+	it('leaves a newer script alone, and says once that the module is behind', async () => {
+		// The script and the module are released together, so a newer script means that the module is out of date.
 		touchpoint.deployedVersion = '999.0.0'
 		const instance = await start()
 
 		expect(touchpoint.count('updateScript')).toBe(0)
 		expect(lastStatus(instance)).toEqual(['ok'])
+
+		const warnings = logged(instance, 'warn')
+		expect(warnings).toHaveLength(1)
+		expect(warnings[0]).toContain('version 999.0.0')
+		expect(warnings[0]).toContain(`version ${MODULE_VERSION}`)
+
+		await advance(5 * MIN) // many refreshes later
+		expect(logged(instance, 'warn')).toHaveLength(1)
 	})
 
-	it('does not touch an up-to-date script', async () => {
-		await start()
+	it('says so again if the script becomes newer still, or the connection restarts', async () => {
+		touchpoint.deployedVersion = '999.0.0'
+		const instance = await start()
+		instance.evaluatePhases('fb', watch([3]), ['event']) // with a room being watched, every refresh asks the script
+		await advance(600)
+		expect(logged(instance, 'warn')).toHaveLength(1)
+
+		touchpoint.deployedVersion = '999.1.0'
+		await advance(30_000)
+		expect(logged(instance, 'warn')).toHaveLength(2)
+
+		await instance.configUpdated(config(), { password: 'pw' })
+		await advance(0)
+		expect(logged(instance, 'warn')).toHaveLength(3)
+	})
+
+	it('does not touch, or say anything about, a script that is the same version', async () => {
+		const instance = await start()
+		await advance(5 * MIN)
+
 		expect(touchpoint.count('updateScript')).toBe(0)
+		expect(logged(instance, 'warn')).toEqual([])
 	})
 
 	it('asks first, in effect, when automatic updates are turned off', async () => {
-		touchpoint.deployedVersion = '0.5.0'
+		touchpoint.deployedVersion = OLDER_SCRIPT
 		const instance = await start({ autoUpdateScript: false })
 
 		expect(touchpoint.count('updateScript')).toBe(0)
@@ -469,7 +498,7 @@ describe('keeping the script in TouchPoint up to date', () => {
 	})
 
 	it('updates when the setting is missing, as it is for connections made before it existed', async () => {
-		touchpoint.deployedVersion = '0.5.0'
+		touchpoint.deployedVersion = OLDER_SCRIPT
 		const old = config()
 		delete (old as Partial<ModuleConfig>).autoUpdateScript
 		const instance = new ModuleInstance({})
@@ -500,7 +529,7 @@ describe('keeping the script in TouchPoint up to date', () => {
 		const instance = await start()
 		expect(lastStatus(instance)?.[0]).toBe('bad_config')
 
-		touchpoint.deployedVersion = SCRIPT_VERSION
+		touchpoint.deployedVersion = MODULE_VERSION
 		await advance(30_000)
 		expect(lastStatus(instance)).toEqual(['ok'])
 	})

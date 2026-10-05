@@ -2,7 +2,6 @@
 	"ok": true,
 	"now": "2026-10-04T17:30:00",
 	"utcOffsetMinutes": -240,
-	"scriptVersion": "1.0.0",
 	"windows": [
 		{
 			"reservationId": 11,

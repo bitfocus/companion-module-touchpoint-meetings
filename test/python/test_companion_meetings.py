@@ -5,9 +5,11 @@ import os
 import re
 import unittest
 
-from harness import FakeDateTime, Row, read_script, run_script
+from harness import FakeDateTime, Row, read_script, run_script, script_version, with_version
 
-FIXTURE = os.path.join(os.path.dirname(__file__), "..", "fixtures", "windows-result.json")
+FIXTURES = os.path.join(os.path.dirname(__file__), "..", "fixtures")
+FIXTURE = os.path.join(FIXTURES, "windows-result.json")
+VERSION = script_version()
 
 
 def reservation_rows():
@@ -22,8 +24,13 @@ def reservation_rows():
     ]
 
 
-def newer_script(version="1.0.1"):
-    return read_script().replace('VERSION = "1.0.0"', 'VERSION = "{}"'.format(version))
+def next_patch_version():
+    major, minor, patch = (int(n) for n in VERSION.split("-")[0].split("."))
+    return "{}.{}.{}".format(major, minor, patch + 1)
+
+
+def newer_script(version=None):
+    return with_version(version or next_patch_version())
 
 
 class RoomsTest(unittest.TestCase):
@@ -52,7 +59,9 @@ class WindowsTest(unittest.TestCase):
         run = run_script({"a": "windows", "rooms": "3,4"}, reservations=reservation_rows())
 
         with open(FIXTURE, encoding="utf-8") as f:
-            self.assertEqual(run.result, json.load(f))
+            expected = json.load(f)
+        expected["scriptVersion"] = VERSION  # the script's version is the module's, so the fixture can't fix it
+        self.assertEqual(run.result, expected)
 
     def test_no_rooms_means_no_query(self):
         run = run_script({"a": "windows", "rooms": ""})
@@ -123,7 +132,7 @@ class DispatchTest(unittest.TestCase):
         run = run_script({})
 
         self.assertIn("installed and ready", run.printed)
-        self.assertIn("version 1.0.0", run.printed)
+        self.assertIn("version " + VERSION, run.printed)
         self.assertEqual(run.model.Title, "Companion Meetings")
         self.assertIsNone(run.data.result)
 
@@ -144,33 +153,44 @@ class DispatchTest(unittest.TestCase):
 
     def test_every_result_reports_the_script_version(self):
         for parameters in ({"a": "rooms"}, {"a": "windows"}, {"a": "nope"}):
-            self.assertEqual(run_script(parameters).result["scriptVersion"], "1.0.0")
+            self.assertEqual(run_script(parameters).result["scriptVersion"], VERSION)
 
 
 class UpdateScriptTest(unittest.TestCase):
-    def update(self, content, method="post", **kwargs):
-        return run_script({"a": "updateScript", "content": content}, method=method, **kwargs)
+    def update(self, content, method="post", installed=None, **kwargs):
+        """Sends a script to the installed one, which is this script, or this script made to have the version given."""
+        source = with_version(installed) if installed else None
+        return run_script({"a": "updateScript", "content": content}, method=method, source=source, **kwargs)
 
     def test_installs_a_newer_version_over_itself(self):
-        source = newer_script("1.0.1")
+        source = newer_script("9.8.7")
         run = self.update(source, script_name="CompanionMeetings")
 
         self.assertTrue(run.result["ok"])
-        self.assertEqual(run.result["updatedFrom"], "1.0.0")
-        self.assertEqual(run.result["updatedTo"], "1.0.1")
+        self.assertEqual(run.result["updatedFrom"], VERSION)
+        self.assertEqual(run.result["updatedTo"], "9.8.7")
         self.assertEqual(run.model.written, [("CompanionMeetings", source, "Companion")])
 
-    def test_versions_are_compared_as_numbers(self):
-        self.assertTrue(self.update(newer_script("1.0.10")).result["ok"])
-        self.assertTrue(self.update(newer_script("1.1")).result["ok"])
-        self.assertTrue(self.update(newer_script("2")).result["ok"])
+    def test_versions_are_compared_as_versions_not_as_text(self):
+        self.assertTrue(self.update(newer_script("0.10.0"), installed="0.9.0").result["ok"])
+        self.assertTrue(self.update(newer_script("1.0.10"), installed="1.0.9").result["ok"])
+        self.assertTrue(self.update(newer_script("10.0.0"), installed="9.0.0").result["ok"])
 
     def test_refuses_the_same_or_an_older_version(self):
-        for version in ("1.0.0", "0.9.9", "0.99"):
-            run = self.update(newer_script(version))
-            self.assertFalse(run.result["ok"], version)
+        for installed, offered in (("1.2.3", "1.2.3"), ("1.2.3", "1.2.2"), ("1.2.3", "0.99.99"), ("1.2.3", "1.2.3-rc.1")):
+            run = self.update(newer_script(offered), installed=installed)
+            self.assertFalse(run.result["ok"], offered)
             self.assertIn("not newer", run.result["error"])
             self.assertEqual(run.model.written, [])
+
+    def test_a_pre_release_can_be_replaced_by_its_release_or_a_later_pre_release(self):
+        for offered in ("1.2.3", "1.2.3-beta.2", "1.2.3-rc.1", "1.3.0-alpha"):
+            run = self.update(newer_script(offered), installed="1.2.3-beta.1")
+            self.assertTrue(run.result["ok"], offered)
+
+    def test_a_release_is_never_replaced_by_a_pre_release_of_it(self):
+        run = self.update(newer_script("1.2.3-rc.9"), installed="1.2.3")
+        self.assertFalse(run.result["ok"])
 
     def test_refuses_anything_but_post(self):
         run = self.update(newer_script(), method="get")
@@ -185,7 +205,8 @@ class UpdateScriptTest(unittest.TestCase):
             "leading whitespace": "\n" + good,
             "can't update itself": good.replace("updateScript", "update_script").replace("updatescript", "x"),
             "no version": re.sub(r'^VERSION = .*$', "", good, flags=re.M),
-            "malformed version": good.replace('VERSION = "1.0.1"', 'VERSION = "one"'),
+            "malformed version": re.sub(r'^VERSION = .*$', 'VERSION = "one"', good, flags=re.M),
+            "not a full version": re.sub(r'^VERSION = .*$', 'VERSION = "9.9"', good, flags=re.M),
             "huge": good + "#" * 200001,
         }
         for label, content in bad.items():
@@ -199,7 +220,33 @@ class UpdateScriptTest(unittest.TestCase):
         source = read_script()
         self.assertTrue(source.startswith("#API"))
         self.assertIn("updateScript", source)
-        self.assertRegex(source, r'(?m)^VERSION = "[0-9.]+"')
+        self.assertRegex(source, r'(?m)^VERSION = "[^"]+"')
+
+
+class VersionTest(unittest.TestCase):
+    """The script compares versions for itself, and the module does too.  Both must agree, so both run these cases."""
+
+    @classmethod
+    def setUpClass(cls):
+        namespace = run_script({}).namespace
+        cls.parse = staticmethod(namespace["parse_version"])
+        cls.compare = staticmethod(namespace["compare_versions"])
+        with open(os.path.join(FIXTURES, "version-comparisons.json"), encoding="utf-8") as f:
+            cls.cases = json.load(f)
+
+    def test_what_is_a_version(self):
+        for text in self.cases["valid"]:
+            self.assertIsNotNone(self.parse(text), text)
+        for text in self.cases["invalid"]:
+            self.assertIsNone(self.parse(text), repr(text))
+
+    def test_which_is_newer(self):
+        for a, b, expected in self.cases["comparisons"]:
+            result = self.compare(self.parse(a), self.parse(b))
+            self.assertEqual((result > 0) - (result < 0), expected, "{} against {}".format(a, b))
+
+    def test_the_script_has_a_version_of_its_own(self):
+        self.assertIsNotNone(self.parse(VERSION), VERSION)
 
 
 class PythonTwoCompatibilityTest(unittest.TestCase):

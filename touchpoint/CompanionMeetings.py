@@ -28,7 +28,11 @@ import re
 
 global model, Data, q
 
-VERSION = "1.0.0"  # Increase whenever this file changes.  The module installs its own copy only when it is newer.
+# The version of this script is the version of the Companion module that carries it: they are released together, so a
+# new version of one is a new version of the other.  `npm run embed` in the module's repository sets this from the
+# module's package.json, so don't change it by hand.  The module installs its copy of this script, replacing this one,
+# when its version is higher than this.
+VERSION = "0.1.0"
 SCRIPT_KEYWORD = "Companion"  # categorizes the script in Special Content.
 MAX_SCRIPT_LENGTH = 200000
 
@@ -159,15 +163,39 @@ def handle_windows():
 
 
 def parse_version(text):
-    # "1.2.3" -> (1, 2, 3).  None if it isn't a dotted number.
-    if not text or not re.match(r"^[0-9]+(\.[0-9]+)*$", text):
+    # Semantic versioning: "1.2.3", or "1.2.3-beta.1" for a pre-release.  Returns ((1, 2, 3), None) or
+    # ((1, 2, 3), ["beta", "1"]), or None if it isn't a version.  (Build metadata, "+...", is allowed and ignored.)
+    match = re.match(r"^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$", text or "")
+    if not match:
         return None
-    return tuple(int(part) for part in text.split("."))
+    prerelease = match.group(4).split(".") if match.group(4) else None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3))), prerelease
 
 
-def get_version_of(source):
-    match = re.search(r'^VERSION = "([0-9.]+)"', source, re.MULTILINE)
-    return parse_version(match.group(1)) if match else None
+def compare_versions(a, b):
+    # Negative if a is older than b, zero if they are the same, positive if a is newer, by semantic versioning's rules.
+    if a[0] != b[0]:
+        return -1 if a[0] < b[0] else 1
+
+    pre_a, pre_b = a[1], b[1]
+    if pre_a is None or pre_b is None:
+        # A release is newer than a pre-release of it.
+        return (pre_a is None) - (pre_b is None)
+
+    for x, y in zip(pre_a, pre_b):
+        if x == y:
+            continue
+        if x.isdigit() and y.isdigit():
+            return -1 if int(x) < int(y) else 1
+        if x.isdigit() or y.isdigit():
+            return -1 if x.isdigit() else 1  # numbers rank below text
+        return -1 if x < y else 1
+    return (len(pre_a) > len(pre_b)) - (len(pre_a) < len(pre_b))  # more parts is newer, if the rest is the same
+
+
+def get_version_text_of(source):
+    match = re.search(r'^VERSION = "([^"]+)"', source, re.MULTILINE)
+    return match.group(1) if match else None
 
 
 def find_problem_with_update(source):
@@ -179,10 +207,10 @@ def find_problem_with_update(source):
     if "updateScript" not in source:
         return "the script can't update itself, so it can't be installed"
 
-    new_version = get_version_of(source)
+    new_version = parse_version(get_version_text_of(source))
     if new_version is None:
-        return "the script has no VERSION"
-    if new_version <= parse_version(VERSION):
+        return "the script has no valid VERSION"
+    if compare_versions(new_version, parse_version(VERSION)) <= 0:
         return "the script is not newer than the installed version"
     return None
 
@@ -199,7 +227,7 @@ def handle_update_script():
         return
 
     model.WriteContentPython(model.ScriptName, source, SCRIPT_KEYWORD)
-    set_result({"ok": True, "updatedFrom": VERSION, "updatedTo": ".".join(str(n) for n in get_version_of(source))})
+    set_result({"ok": True, "updatedFrom": VERSION, "updatedTo": get_version_text_of(source)})
 
 
 def show_ready_message():

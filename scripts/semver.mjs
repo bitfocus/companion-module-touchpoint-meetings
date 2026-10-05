@@ -1,13 +1,13 @@
-/** A version, by semantic versioning: 1.2.3, or 1.2.3-beta.1 for a pre-release. */
-export type Version = {
-	core: [number, number, number]
-	prerelease?: string[]
-}
+// Semantic versioning, for the release scripts: what is a version, and which of two is newer.
+//
+// The module (src/version.ts) and the TouchPoint script (touchpoint/CompanionMeetings.py) each compare versions too, by
+// the same rules. They are all tested against the same list of cases (test/fixtures/version-comparisons.json), so they
+// can't disagree.
 
 const VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/
 
-/** The version in the text, or undefined if it isn't one. Build metadata ("+...") is allowed and ignored. */
-export function parseVersion(text: unknown): Version | undefined {
+/** The version in the text, as { core: [major, minor, patch], prerelease?: string[] }, or undefined if it isn't one. */
+export function parseVersion(text) {
 	const match = typeof text === 'string' ? VERSION.exec(text) : null
 	if (!match) return undefined
 
@@ -17,13 +17,10 @@ export function parseVersion(text: unknown): Version | undefined {
 	}
 }
 
-const isNumber = (identifier: string) => /^\d+$/.test(identifier)
+const isNumber = (identifier) => /^\d+$/.test(identifier)
 
-/**
- * Negative if `a` is older than `b`, zero if they are the same, and positive if `a` is newer, by semantic versioning's
- * rules. The script in TouchPoint compares versions the same way (and a test makes sure that they agree).
- */
-export function compareVersions(a: Version, b: Version): number {
+/** Negative if `a` is older than `b`, zero if they are the same, and positive if `a` is newer. */
+export function compareVersions(a, b) {
 	for (let i = 0; i < 3; i++) {
 		if (a.core[i] !== b.core[i]) return a.core[i] < b.core[i] ? -1 : 1
 	}
