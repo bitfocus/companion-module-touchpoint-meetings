@@ -7,6 +7,7 @@ import { UpdateFeedbacks, type FeedbacksSchema } from './feedbacks.js'
 import { UpdatePresets } from './presets.js'
 import { TouchPointClient, TouchPointError } from './touchpointApi.js'
 import { activeWindows, expandRoomIds } from './occupancy.js'
+import { MODULE_VERSION } from './scriptSource.js'
 import type { Phase, Room, RoomWatch, RoomWindow } from './types.js'
 
 export type ModuleSchema = {
@@ -44,6 +45,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	private lastRefreshIso = ''
 	private readonly subscriptions = new Map<string, Subscription>()
 	private scriptUpdateProblem: string | undefined // set when an automatic update failed, so it isn't retried every refresh.
+	private warnedAboutNewerScript: string | undefined // the newer script version already mentioned in the log
 
 	private pollTimer: NodeJS.Timeout | undefined
 	private tickTimer: NodeJS.Timeout | undefined
@@ -166,6 +168,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		this.updateStatus(InstanceStatus.Connecting)
 		this.roomsLoadedMs = 0
 		this.scriptUpdateProblem = undefined
+		this.warnedAboutNewerScript = undefined
 		this.tickTimer = setInterval(() => this.tick(), 1000)
 		void this.pollLoop(generation)
 	}
@@ -300,8 +303,24 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 		this.lastRefreshIso = new Date().toISOString()
 		this.updateStatus(InstanceStatus.Ok)
+		this.warnIfScriptIsNewer(client.newerScriptVersion)
 		this.pushVariableValues()
 		this.tick()
+	}
+
+	/**
+	 * The module and the script are released together, with the same version, so a script that is newer than the module
+	 * means that the module is behind. Nothing breaks (the script is left as it is), but it is worth saying, once.
+	 */
+	private warnIfScriptIsNewer(scriptVersion: string | undefined): void {
+		if (!scriptVersion || scriptVersion === this.warnedAboutNewerScript) return
+
+		this.warnedAboutNewerScript = scriptVersion
+		this.log(
+			'warn',
+			`The script in TouchPoint is version ${scriptVersion}, which is newer than this module (version ${MODULE_VERSION}). ` +
+				'They are released together, so this module should be updated. The script has been left as it is.',
+		)
 	}
 
 	/** For diagnosing time problems: what TouchPoint's clock said, how it was interpreted, and each reservation found. */
