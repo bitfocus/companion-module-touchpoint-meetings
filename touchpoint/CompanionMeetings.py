@@ -3,7 +3,7 @@
 # Title: Companion Meetings
 # Description: Data source for the Bitfocus Companion "TouchPoint Meetings" module, reporting when rooms are in setup, in use, or in teardown.
 # Source: https://github.com/bitfocus/companion-module-touchpoint-meetings/blob/main/touchpoint/CompanionMeetings.py
-# Author: James at Tenth
+# Author: Doxology Technologies
 #
 # This is not an official TouchPoint product: it is not developed, endorsed, or supported by TouchPoint Software, Inc.
 #

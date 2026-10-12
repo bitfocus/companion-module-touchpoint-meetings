@@ -48,4 +48,4 @@ Add a preset from **Room Status** to a button and choose its room in the feedbac
 - **A bug, or something you'd like it to do:** [open an issue](https://github.com/bitfocus/companion-module-touchpoint-meetings/issues).
 - **Working on the module:** [DEVELOPMENT.md](./DEVELOPMENT.md).
 
-Released under the [MIT license](./LICENSE).
+Developed and maintained by Doxology Technologies. © 2026 Doxology Technologies. Released under the [MIT license](./LICENSE).

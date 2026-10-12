@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { MODULE_VERSION, REPOSITORY_URL, SCRIPT_PATH, SCRIPT_SOURCE } from '../scriptSource.js'
@@ -119,6 +120,28 @@ describe('the repository’s address', () => {
 			]
 			expect(new Set(addresses.map((m) => m[0])), file).toEqual(addresses.length ? new Set([expected]) : new Set())
 		}
+	})
+})
+
+describe('the license', () => {
+	it('is MIT in package.json, which Bitfocus requires of the source, and in the manifest', () => {
+		expect(packageJson.license).toBe('MIT')
+		expect(manifest.license).toBe('MIT')
+	})
+
+	it('is the template’s LICENSE file, unchanged, which is how Bitfocus’s review expects it', () => {
+		// The copyright line is the template's (Bitfocus AS - Open Source), so the file has to be exactly the template's.
+		// This is a hash of the template's LICENSE (companion-module-template-ts), not of whatever the file now holds.
+		const hash = createHash('sha256').update(read('LICENSE')).digest('hex')
+		expect(hash, 'LICENSE no longer matches the template. Put attribution in the README or package.json instead.').toBe(
+			'926a1e1a332e33240bbf9b9df5895aabba46e4a4ad110a5d42e2a799627aa27e',
+		)
+	})
+
+	it('has the maintainer’s attribution elsewhere: package.json, the script header, and the README', () => {
+		expect(packageJson.author).toBe('Doxology Technologies')
+		expect(script).toContain('# Author: Doxology Technologies')
+		expect(read('README.md')).toContain('Doxology Technologies')
 	})
 })
 
