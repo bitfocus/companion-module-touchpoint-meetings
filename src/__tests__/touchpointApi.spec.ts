@@ -17,7 +17,14 @@ type Seen = {
 	params: URLSearchParams
 }
 
-type Reply = { status?: number; headers?: Record<string, string>; body?: string; delayMs?: number }
+type Reply = {
+	status?: number
+	headers?: Record<string, string>
+	body?: string
+	delayMs?: number
+	/** Send the headers and the start of the body, and then say nothing more. */
+	stallAfterHeaders?: boolean
+}
 
 /** The fixture, as reported by a script at the version these tests' client expects. */
 const fromScript = (changes: Record<string, unknown> = {}) => ({ ...fixture, scriptVersion: '1.2.0', ...changes })
@@ -50,6 +57,10 @@ beforeEach(async () => {
 			const r = reply(request)
 			setTimeout(() => {
 				res.writeHead(r.status ?? 200, { 'content-type': 'application/json', ...r.headers })
+				if (r.stallAfterHeaders) {
+					res.write((r.body ?? '').slice(0, 10)) // part of the answer, so that the client is left waiting for the rest
+					return
+				}
 				res.end(r.body ?? '')
 			}, r.delayMs ?? 0)
 		})
@@ -264,6 +275,18 @@ describe('failures', () => {
 		expect(error.kind).toBe('connection')
 		expect(error.message).toContain('ValueError: boom')
 	})
+
+	it('give up when TouchPoint starts to answer and then stalls, too: the timeout covers the whole answer', async () => {
+		// The headers arrive at once, but the rest of the answer never does. Without a limit on reading it, the request
+		// would wait for as long as Node does by default (about five minutes), with polling stopped the whole time.
+		reply = () => ({ ...envelope({ ok: true, scriptVersion: '1.2.0' }), stallAfterHeaders: true })
+
+		const started = Date.now()
+		const error = await failureOf(client({ requestTimeoutMs: 1000 }).getRooms())
+
+		expect(error.message).toContain('timed out')
+		expect(Date.now() - started).toBeLessThan(5000)
+	}, 15_000)
 
 	it('give up when TouchPoint takes too long', async () => {
 		reply = () => ({ ...envelope({ ok: true, scriptVersion: '1.2.0' }), delayMs: 3000 })

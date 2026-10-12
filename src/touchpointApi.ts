@@ -15,6 +15,9 @@ export type TouchPointClientOptions = {
 	scriptSource?: string
 }
 
+/** What TouchPoint's Python API answers with: what the script printed, and the data it set. */
+type Envelope = { output?: unknown; data?: { result?: unknown } }
+
 export class TouchPointError extends Error {
 	constructor(
 		message: string,
@@ -114,49 +117,17 @@ export class TouchPointClient {
 	}
 
 	private async call(params: Record<string, string>, checkVersion = true): Promise<Record<string, unknown>> {
+		// One timer for the whole exchange, until the answer has been read, not only until it starts to arrive: TouchPoint
+		// can begin to answer and then stall, and a timeout that had stopped by then would leave the request waiting for
+		// as long as Node does by default (about five minutes), with everything that waits on it.
 		const abort = new AbortController()
 		const timeout = setTimeout(() => abort.abort(), this.requestTimeoutMs)
 
-		let response: Response
+		let envelope: Envelope
 		try {
-			response = await fetch(this.url, {
-				method: 'POST',
-				signal: abort.signal,
-				headers: {
-					Authorization: this.authorization,
-					Accept: 'application/json',
-					'Content-Type': 'application/x-www-form-urlencoded',
-				},
-				body: new URLSearchParams(params).toString(),
-				redirect: 'manual', // a bad login redirects to an HTML sign-in page.
-			})
-		} catch (e) {
-			throw new TouchPointError(
-				abort.signal.aborted ? 'Request timed out' : `Could not reach TouchPoint: ${errorText(e)}`,
-				'connection',
-			)
+			envelope = await this.exchange(params, abort.signal)
 		} finally {
 			clearTimeout(timeout)
-		}
-
-		if (response.status === 401 || response.status === 403 || (response.status >= 300 && response.status < 400)) {
-			throw new TouchPointError(
-				'TouchPoint rejected the credentials. The user needs the Developer and APIOnly roles.',
-				'auth',
-			)
-		}
-		if (response.status === 404) {
-			throw new TouchPointError('Script not found. Check the script name, and that it begins with #API.', 'connection')
-		}
-		if (!response.ok) {
-			throw new TouchPointError(`TouchPoint returned HTTP ${response.status}`, 'connection')
-		}
-
-		let envelope: { output?: unknown; data?: { result?: unknown } }
-		try {
-			envelope = (await response.json()) as { output?: unknown; data?: { result?: unknown } }
-		} catch (e) {
-			throw new TouchPointError(`Unexpected response from TouchPoint: ${errorText(e)}`, 'connection')
 		}
 
 		const result = envelope.data?.result
@@ -178,6 +149,51 @@ export class TouchPointClient {
 			throw new TouchPointError(`The script reported an error: ${text(parsed.error, 'unknown')}`, 'connection')
 		}
 		return parsed
+	}
+
+	/** Sends the request and reads the whole answer, so that `signal` (the timeout) applies to all of it. */
+	private async exchange(params: Record<string, string>, signal: AbortSignal): Promise<Envelope> {
+		let response: Response
+		try {
+			response = await fetch(this.url, {
+				method: 'POST',
+				signal,
+				headers: {
+					Authorization: this.authorization,
+					Accept: 'application/json',
+					'Content-Type': 'application/x-www-form-urlencoded',
+				},
+				body: new URLSearchParams(params).toString(),
+				redirect: 'manual', // a bad login redirects to an HTML sign-in page.
+			})
+		} catch (e) {
+			throw new TouchPointError(
+				signal.aborted ? 'Request timed out' : `Could not reach TouchPoint: ${errorText(e)}`,
+				'connection',
+			)
+		}
+
+		if (response.status === 401 || response.status === 403 || (response.status >= 300 && response.status < 400)) {
+			throw new TouchPointError(
+				'TouchPoint rejected the credentials. The user needs the Developer and APIOnly roles.',
+				'auth',
+			)
+		}
+		if (response.status === 404) {
+			throw new TouchPointError('Script not found. Check the script name, and that it begins with #API.', 'connection')
+		}
+		if (!response.ok) {
+			throw new TouchPointError(`TouchPoint returned HTTP ${response.status}`, 'connection')
+		}
+
+		try {
+			return (await response.json()) as Envelope
+		} catch (e) {
+			throw new TouchPointError(
+				signal.aborted ? 'Request timed out' : `Unexpected response from TouchPoint: ${errorText(e)}`,
+				'connection',
+			)
+		}
 	}
 
 	/**
