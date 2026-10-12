@@ -50,6 +50,8 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	private pollTimer: NodeJS.Timeout | undefined
 	private tickTimer: NodeJS.Timeout | undefined
 	private debounceTimer: NodeJS.Timeout | undefined
+	private refreshing: Promise<void> | undefined // the refresh that is running, with any that follow it
+	private refreshNext: { windowsOnly: boolean } | undefined // what to refresh next, if asked while one was running
 	private requests = new AbortController() // cancels the requests to TouchPoint that are still running, when stopped
 	private generation = 0 // incremented whenever the connection is restarted, so that stale requests are ignored.
 
@@ -180,6 +182,8 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		// leave those connections open until they time out.
 		this.requests.abort()
 		this.requests = new AbortController()
+		this.refreshing = undefined
+		this.refreshNext = undefined
 		clearTimeout(this.pollTimer)
 		clearTimeout(this.debounceTimer)
 		clearInterval(this.tickTimer)
@@ -224,7 +228,43 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		}, 500)
 	}
 
+	/**
+	 * Refreshes from TouchPoint, one at a time. A refresh can be asked for by the regular poll, by a feedback being added
+	 * or removed, and by the Refresh action, and nothing stops those coinciding. Overlapping refreshes finish in either
+	 * order, and an older one's answer (given before something the newer one was asked about) can then replace the newer
+	 * one's: a feedback goes off and back on, which can fire a trigger either way, and at startup a quick refresh can run
+	 * before the room list has arrived, or two can both find the script out of date and both upload it.
+	 *
+	 * So while one is running, a request for another is remembered, and one more runs when it is done (so whatever was
+	 * asked for still gets what it needed, such as the reservations of a room that was added meanwhile, and the answers
+	 * are applied in the order the questions were asked). Any number of requests during one refresh become one follow-up.
+	 */
 	private async refresh(generation: number, windowsOnly = false): Promise<void> {
+		if (this.refreshing) {
+			// Needs the room list too if any of what is waiting does.
+			this.refreshNext = { windowsOnly: windowsOnly && (this.refreshNext?.windowsOnly ?? true) }
+			await this.refreshing
+			return
+		}
+
+		// (Everything up to the first await runs at once, so a second request in the same moment sees this one.)
+		const running: Promise<void> = this.refreshThenFollowUps(generation, windowsOnly).finally(() => {
+			if (this.refreshing === running) this.refreshing = undefined
+		})
+		this.refreshing = running
+		await running
+	}
+
+	private async refreshThenFollowUps(generation: number, windowsOnly: boolean): Promise<void> {
+		let next: { windowsOnly: boolean } | undefined = { windowsOnly }
+		while (next) {
+			this.refreshNext = undefined
+			await this.refreshOnce(generation, next.windowsOnly)
+			next = generation === this.generation ? this.refreshNext : undefined // stopped meanwhile: nothing to follow up
+		}
+	}
+
+	private async refreshOnce(generation: number, windowsOnly: boolean): Promise<void> {
 		const client = this.buildClient()
 		try {
 			try {
