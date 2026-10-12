@@ -76,7 +76,7 @@ export class TouchPointClient {
 		roomIds: number[],
 		backMinutes: number,
 		aheadMinutes: number,
-	): Promise<{ windows: RoomWindow[]; clock: ServerClock; offsetMs: number }> {
+	): Promise<{ windows: RoomWindow[]; clock: ServerClock; offsetMs: number | undefined }> {
 		const result = await this.call({
 			a: 'windows',
 			rooms: roomIds.join(','),
@@ -84,21 +84,18 @@ export class TouchPointClient {
 			ahead: String(Math.round(aheadMinutes)),
 		})
 		const clock = parseClock(result.now)
-		// Reservation times are in the church's local time; the script reports how far that is from UTC, from
-		// TouchPoint's LocalTimeZone setting. (The database and server clock can be in a different zone.)
-		const offsetMinutes = Number(result.utcOffsetMinutes)
-		if (result.utcOffsetMinutes === undefined || !Number.isFinite(offsetMinutes)) {
-			throw new TouchPointError(
-				'The script did not report a time zone offset. Update the CompanionMeetings script.',
-				'connection',
-			)
-		}
-		const offsetMs = offsetMinutes * 60_000
+		// Reservation times are stored in the church's local time. The script converts each one to UTC itself, by the
+		// rules of TouchPoint's LocalTimeZone for that reservation's own date, because the range that is fetched can
+		// contain a change of clocks for daylight saving time, and one offset for all of them would be an hour out on one
+		// side of it. (The database and server clock can be in a different zone, which is why it isn't taken from them.)
+		// The offset it reports as well is how far local time is from UTC right now, and is only for diagnosing problems.
+		const offsetMinutes = result.utcOffsetMinutes === undefined ? Number.NaN : Number(result.utcOffsetMinutes)
+		const offsetMs = Number.isFinite(offsetMinutes) ? offsetMinutes * 60_000 : undefined
 
 		const windows: RoomWindow[] = []
 		for (const w of asArray(result.windows)) {
-			const startMs = parseNaive(w.start) - offsetMs
-			const endMs = parseNaive(w.end) - offsetMs
+			const startMs = parseUtc(w.startUtc)
+			const endMs = parseUtc(w.endUtc)
 			if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) continue
 			windows.push({
 				reservationId: Number(w.reservationId),
@@ -250,6 +247,13 @@ function text(value: unknown, fallback: string): string {
 
 function errorText(e: unknown): string {
 	return e instanceof Error ? e.message : String(e)
+}
+
+/** Reads "2026-10-04T14:30:00Z", a time that says it is UTC. NaN if it isn't one (a missing "Z" would make it local). */
+function parseUtc(value: unknown): number {
+	return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)
+		? Date.parse(value)
+		: Number.NaN
 }
 
 /** Reads "2026-10-04T09:30:00" as if it were UTC */

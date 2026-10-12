@@ -21,7 +21,9 @@
 # Parameters (Data.*):
 #   a      "updateScript" (POST) replaces this script with the newer version given in "content".
 #          "rooms" lists the rooms/reservables, so the module can offer a picker and resolve child rooms.
-#          "windows" lists reservations for a set of rooms that are active within a time range around now.
+#          "windows" lists reservations for a set of rooms that are active within a time range around now.  Each has its
+#          start and end in UTC (startUtc, endUtc), converted for each reservation by the time zone's rules for its own
+#          date, and in the church's local time (start, end), which is for diagnosing problems.
 #   rooms  (windows) comma-separated ReservableIds.  Child-room expansion is done by the caller, using the "rooms" list.
 #   back   (windows) minutes before now to include.  Default 60.
 #   ahead  (windows) minutes after now to include.  Default 1440.
@@ -62,20 +64,35 @@ def get_int(value, default, minimum, maximum):
         return default
 
 
-def get_local_time():
+def get_time_zone():
     # Meeting and reservation times are stored in the church's local time, which is not necessarily the time zone of the
     # server and database (typically Central).  TouchPoint's "LocalTimeZone" setting, a Windows time zone id, says what
     # the local time zone is, so that is used here, rather than GETDATE().
-    from System import DateTime, TimeZoneInfo
+    from System import TimeZoneInfo
 
     try:
-        tz = TimeZoneInfo.FindSystemTimeZoneById(model.Setting("LocalTimeZone", "Central Standard Time"))
+        return TimeZoneInfo.FindSystemTimeZoneById(model.Setting("LocalTimeZone", "Central Standard Time"))
     except Exception:
-        tz = TimeZoneInfo.Local  # what TouchPoint itself falls back to.
+        return TimeZoneInfo.Local  # what TouchPoint itself falls back to.
+
+
+def get_local_time(tz):
+    # The church's local time right now, and how far that is from UTC right now.
+    from System import DateTime, TimeZoneInfo
 
     utc_now = DateTime.UtcNow
     local_now = TimeZoneInfo.ConvertTimeFromUtc(utc_now, tz)
     return local_now.ToString(DATE_FORMAT), int(tz.GetUtcOffset(utc_now).TotalMinutes)
+
+
+def to_utc_text(local_time, tz):
+    # A reservation's time (in the church's local time) as UTC, by the offset the church's time zone has at that time, not
+    # now: the reservations that are fetched can reach an hour back and a day or more ahead, which can include a change
+    # of clocks for daylight saving time, and a single offset for them all would be an hour out on one side of it.
+    # For a time that falls in the change itself, GetUtcOffset says the standard offset: a time that doesn't exist (2:30 AM
+    # when the clocks skip from 2 to 3) is read as an hour later, and one that happens twice (1:30 AM when they go back)
+    # as its second time.  It doesn't throw for either, unlike ConvertTimeToUtc.
+    return local_time.Subtract(tz.GetUtcOffset(local_time)).ToString(DATE_FORMAT) + "Z"
 
 
 def get_reservables():
@@ -145,7 +162,8 @@ def handle_windows():
     back = get_int(Data.back, DEFAULT_BACK_MINUTES, 0, MAX_RANGE_MINUTES)
     ahead = get_int(Data.ahead, DEFAULT_AHEAD_MINUTES, 1, MAX_RANGE_MINUTES)
 
-    local_now, utc_offset_minutes = get_local_time()
+    tz = get_time_zone()
+    local_now, utc_offset_minutes = get_local_time(tz)
 
     windows = []
     if len(reservable_ids) > 0:
@@ -157,6 +175,8 @@ def handle_windows():
                 "name": w.Name,
                 "start": w.MeetingStart.ToString(DATE_FORMAT),
                 "end": w.MeetingEnd.ToString(DATE_FORMAT),
+                "startUtc": to_utc_text(w.MeetingStart, tz),
+                "endUtc": to_utc_text(w.MeetingEnd, tz),
                 "setupMinutes": int(w.SetupMinutes),
                 "teardownMinutes": int(w.TeardownMinutes)
             })

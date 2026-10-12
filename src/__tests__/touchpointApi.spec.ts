@@ -177,12 +177,11 @@ describe('getWindows', () => {
 		expect(seen[0].params.get('ahead')).toBe('1470')
 	})
 
-	it("turn the church's local times into real instants, using the offset the script reports", async () => {
+	it('read each reservation’s start and end from the UTC times the script gives', async () => {
 		const { windows, offsetMs, clock } = await client().getWindows([3, 4], 60, 1440)
 
-		// The fixture is UTC-4 (Eastern daylight time): 17:00 local is 21:00 UTC.
-		expect(offsetMs).toBe(-4 * 3_600_000)
 		expect(clock.naiveNowMs).toBe(Date.UTC(2026, 9, 4, 17, 30))
+		expect(offsetMs).toBe(-4 * 3_600_000) // only for the log; the times below don't depend on it
 		expect(windows[0]).toEqual({
 			reservationId: 11,
 			roomId: 3,
@@ -202,28 +201,63 @@ describe('getWindows', () => {
 		})
 	})
 
-	it('follow a different time zone', async () => {
-		reply = () => envelope(fromScript({ utcOffsetMinutes: 330 })) // India
-		const { windows } = await client().getWindows([3], 60, 1440)
-
-		expect(windows[0].startMs).toBe(Date.UTC(2026, 9, 4, 11, 30)) // 17:00 local
-	})
-
-	it('ignore reservations with times it cannot read', async () => {
+	it('use the UTC times as given, so a meeting across a daylight-saving change is as long as it really is', async () => {
+		// 1 AM to 4 AM on the clock, on the day the clocks skip an hour: two hours long. The offset right now (UTC-5, before
+		// the change) would make it three if it were applied to both ends, which is what the script now does per reservation.
 		reply = () =>
 			envelope(
 				fromScript({
-					windows: [{ reservationId: 1, reservableId: 3, meetingId: 1, name: 'x', start: 'soon', end: 'later' }],
+					utcOffsetMinutes: -300,
+					windows: [
+						{
+							reservationId: 1,
+							reservableId: 3,
+							meetingId: 1,
+							name: 'Overnight',
+							start: '2026-03-08T01:00:00',
+							end: '2026-03-08T04:00:00',
+							startUtc: '2026-03-08T06:00:00Z',
+							endUtc: '2026-03-08T08:00:00Z',
+							setupMinutes: 0,
+							teardownMinutes: 0,
+						},
+					],
 				}),
 			)
-		expect((await client().getWindows([3], 60, 1440)).windows).toEqual([])
+
+		const [window] = (await client().getWindows([3], 60, 1440)).windows
+		expect(window.startMs).toBe(Date.UTC(2026, 2, 8, 6, 0))
+		expect(window.endMs).toBe(Date.UTC(2026, 2, 8, 8, 0))
+		expect(window.endMs - window.startMs).toBe(2 * 3_600_000)
 	})
 
-	it('refuse to guess the time zone if the script does not report it', async () => {
+	it('do not need the offset, which is only there for diagnosing problems', async () => {
 		reply = () => envelope(fromScript({ utcOffsetMinutes: undefined }))
 
-		const error = await failureOf(client().getWindows([3], 60, 1440))
-		expect(error.message).toContain('time zone offset')
+		const { windows, offsetMs } = await client().getWindows([3, 4], 60, 1440)
+		expect(windows).toHaveLength(2)
+		expect(offsetMs).toBeUndefined()
+	})
+
+	it.each([
+		['times it cannot read', { startUtc: 'soon', endUtc: 'later' }],
+		['no UTC times, as from a script that only gives local ones', { startUtc: undefined, endUtc: undefined }],
+		['only one of the two', { endUtc: undefined }],
+	])('ignore reservations with %s', async (_label, changes) => {
+		const reservation = {
+			reservationId: 1,
+			reservableId: 3,
+			meetingId: 1,
+			name: 'x',
+			start: '2026-10-04T17:00:00',
+			end: '2026-10-04T18:00:00',
+			startUtc: '2026-10-04T21:00:00Z',
+			endUtc: '2026-10-04T22:00:00Z',
+			...changes,
+		}
+		reply = () => envelope(fromScript({ windows: [reservation] }))
+
+		expect((await client().getWindows([3], 60, 1440)).windows).toEqual([])
 	})
 })
 

@@ -13,11 +13,6 @@ import types
 
 SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "touchpoint", "CompanionMeetings.py")
 
-TIME_ZONES = {  # Windows time zone id -> UTC offset in minutes (as of the fixed "now" used in tests).
-    "Eastern Standard Time": -240,
-    "Central Standard Time": -300,
-    "Pacific Standard Time": -420,
-}
 LOCAL_OFFSET_MINUTES = -300  # TimeZoneInfo.Local
 
 
@@ -39,28 +34,70 @@ def with_version(version, source=None):
     return re.sub(r'^VERSION = "[^"]*"$', 'VERSION = "{}"'.format(version), source, flags=re.MULTILINE)
 
 
-class FakeDateTime(object):
-    """A .NET DateTime, as far as the script uses it."""
+class FakeTimeSpan(object):
+    def __init__(self, minutes):
+        self.minutes = float(minutes)
+        self.TotalMinutes = self.minutes
 
-    def __init__(self, dt):
+
+class FakeDateTime(object):
+    """A .NET DateTime, as far as the script uses it.  A time from the database is in no particular zone ("unspecified");
+    the current time is UTC."""
+
+    def __init__(self, dt, utc=False):
         self.dt = dt
+        self.is_utc = utc
 
     def ToString(self, fmt):
         assert fmt == "yyyy-MM-ddTHH:mm:ss", "unexpected format " + fmt
         return self.dt.strftime("%Y-%m-%dT%H:%M:%S")
 
-
-class FakeTimeSpan(object):
-    def __init__(self, minutes):
-        self.TotalMinutes = float(minutes)
+    def Subtract(self, span):
+        return FakeDateTime(self.dt - datetime.timedelta(minutes=span.minutes), self.is_utc)
 
 
 class FakeTimeZone(object):
-    def __init__(self, offset_minutes):
-        self.offset_minutes = offset_minutes
+    """A time zone, with .NET's rules.  Daylight saving time is optional: `starts` and `ends` are the local wall-clock
+    times of the changes.  At `starts` the clocks skip forward an hour, so that hour doesn't exist; at `ends` they go back
+    an hour, so the hour before it happens twice.  For a time in either of those hours, .NET's GetUtcOffset says the
+    standard offset."""
 
-    def GetUtcOffset(self, _utc):
-        return FakeTimeSpan(self.offset_minutes)
+    def __init__(self, standard_minutes, daylight_minutes=None, starts=None, ends=None):
+        self.standard = standard_minutes
+        self.daylight = daylight_minutes
+        self.starts = starts
+        self.ends = ends
+
+    def GetUtcOffset(self, when):
+        if self.daylight is None:
+            return FakeTimeSpan(self.standard)
+
+        hour = datetime.timedelta(hours=1)
+        if when.is_utc:
+            # An instant: daylight time runs from when standard time reads `starts` until daylight time reads `ends`.
+            starts = self.starts - datetime.timedelta(minutes=self.standard)
+            ends = self.ends - datetime.timedelta(minutes=self.daylight)
+            return FakeTimeSpan(self.daylight if starts <= when.dt < ends else self.standard)
+
+        # A wall-clock time.
+        if self.starts + hour <= when.dt < self.ends - hour:
+            return FakeTimeSpan(self.daylight)
+        return FakeTimeSpan(self.standard)  # including the hour that doesn't exist, and the one that happens twice
+
+    def is_invalid(self, when):
+        return self.daylight is not None and self.starts <= when.dt < self.starts + datetime.timedelta(hours=1)
+
+    def is_ambiguous(self, when):
+        return self.daylight is not None and self.ends - datetime.timedelta(hours=1) <= when.dt < self.ends
+
+
+# Windows time zone id -> the zone.  Eastern has the real 2026 daylight saving changes (March 8, and November 1, both at
+# 2 AM); the others are fixed, at the offset they have on the date the tests treat as "now".
+TIME_ZONES = {
+    "Eastern Standard Time": FakeTimeZone(-300, -240, datetime.datetime(2026, 3, 8, 2), datetime.datetime(2026, 11, 1, 2)),
+    "Central Standard Time": FakeTimeZone(-300),
+    "Pacific Standard Time": FakeTimeZone(-420),
+}
 
 
 def install_fake_system(utc_now):
@@ -71,14 +108,14 @@ def install_fake_system(utc_now):
         def FindSystemTimeZoneById(zone_id):
             if zone_id not in TIME_ZONES:
                 raise Exception("The time zone ID '{}' was not found".format(zone_id))
-            return FakeTimeZone(TIME_ZONES[zone_id])
+            return TIME_ZONES[zone_id]
 
         @staticmethod
         def ConvertTimeFromUtc(utc, tz):
-            return FakeDateTime(utc.dt + datetime.timedelta(minutes=tz.offset_minutes))
+            return FakeDateTime(utc.dt + datetime.timedelta(minutes=tz.GetUtcOffset(utc).minutes))
 
     class DateTime(object):
-        UtcNow = FakeDateTime(utc_now)
+        UtcNow = FakeDateTime(utc_now, utc=True)
 
     module = types.ModuleType("System")
     module.DateTime = DateTime

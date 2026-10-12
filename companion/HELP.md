@@ -24,7 +24,7 @@ Cancelled meetings are left out. The script does not look at people, attendance,
 **What it needs.**
 
 - A TouchPoint user for Companion, with the **Developer** and **APIOnly** roles. A dedicated user is strongly recommended, because the Developer role is powerful. If Developer isn't an option for your users, ask TouchPoint support to enable it.
-- TouchPoint's **LocalTimeZone** setting set to your church's time zone. Reservation times are stored in your local time, which can differ from the server's (often Central), and the script uses this setting to tell the module how they relate. Daylight saving time is handled.
+- TouchPoint's **LocalTimeZone** setting set to your church's time zone. Reservation times are stored in your local time, which can differ from the server's (often Central), and the script uses this setting to convert them to real times, following daylight saving time for each reservation's own date.
 
 #### Installing it for the first time
 

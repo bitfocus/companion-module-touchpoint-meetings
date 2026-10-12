@@ -370,12 +370,17 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	}
 
 	/** For diagnosing time problems: what TouchPoint's clock said, how it was interpreted, and each reservation found. */
-	private logWindows(windows: RoomWindow[], naiveNowMs: number, offsetMs: number, roomIds: Set<number>): void {
+	private logWindows(
+		windows: RoomWindow[],
+		naiveNowMs: number,
+		offsetMs: number | undefined,
+		roomIds: Set<number>,
+	): void {
 		const iso = (ms: number): string => new Date(ms).toISOString()
 		this.log(
 			'debug',
 			`TouchPoint local time ${iso(naiveNowMs).slice(0, 19)}, this machine (UTC) ${iso(Date.now()).slice(0, 19)}, ` +
-				`LocalTimeZone is UTC${offsetMs >= 0 ? '+' : '-'}${Math.abs(offsetMs) / 3_600_000}h; ` +
+				`LocalTimeZone is ${offsetMs === undefined ? 'of unknown offset' : `UTC${offsetMs >= 0 ? '+' : '-'}${Math.abs(offsetMs) / 3_600_000}h right now`}; ` +
 				`${windows.length} reservation(s) for rooms ${[...roomIds].join(',')}`,
 		)
 		for (const w of windows) {

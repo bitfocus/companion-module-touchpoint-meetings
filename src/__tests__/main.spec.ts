@@ -36,6 +36,7 @@ const OLDER_SCRIPT = '0.0.1' // older than any real version of the module
 const NOW = Date.UTC(2026, 9, 4, 21, 30) // 17:30 in the church's time zone, which is UTC-4 in the tests
 const UTC_OFFSET_MINUTES = -240
 
+const utc = (ms: number) => new Date(ms).toISOString().slice(0, 19) + 'Z'
 const naive = (ms: number) => new Date(ms + UTC_OFFSET_MINUTES * MIN).toISOString().slice(0, 19)
 
 type FakeRoom = { id: number; parentId: number | null; name: string }
@@ -50,6 +51,8 @@ function reservation(roomId: number, startsIn: number, endsIn: number, setup = 0
 		name,
 		start: naive(NOW + startsIn * MIN),
 		end: naive(NOW + endsIn * MIN),
+		startUtc: utc(NOW + startsIn * MIN),
+		endUtc: utc(NOW + endsIn * MIN),
 		setupMinutes: setup,
 		teardownMinutes: teardown,
 	}
