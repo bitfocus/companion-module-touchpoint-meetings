@@ -84,12 +84,6 @@ class FakeTimeZone(object):
             return FakeTimeSpan(self.daylight)
         return FakeTimeSpan(self.standard)  # including the hour that doesn't exist, and the one that happens twice
 
-    def is_invalid(self, when):
-        return self.daylight is not None and self.starts <= when.dt < self.starts + datetime.timedelta(hours=1)
-
-    def is_ambiguous(self, when):
-        return self.daylight is not None and self.ends - datetime.timedelta(hours=1) <= when.dt < self.ends
-
 
 # Windows time zone id -> the zone.  Eastern has the real 2026 daylight saving changes (March 8, and November 1, both at
 # 2 AM); the others are fixed, at the offset they have on the date the tests treat as "now".
