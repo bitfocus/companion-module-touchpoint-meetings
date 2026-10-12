@@ -288,6 +288,28 @@ describe('failures', () => {
 		expect(Date.now() - started).toBeLessThan(5000)
 	}, 15_000)
 
+	it('stop at once when the caller cancels, rather than waiting for the timeout', async () => {
+		reply = () => ({ ...envelope({ ok: true, scriptVersion: '1.2.0' }), delayMs: 5000 })
+
+		const cancel = new AbortController()
+		const started = Date.now()
+		const pending = failureOf(client({ requestTimeoutMs: 30_000, signal: cancel.signal }).getRooms())
+		setTimeout(() => cancel.abort(), 100)
+		const error = await pending
+
+		expect(error.kind).toBe('connection')
+		expect(error.message).toContain('cancelled')
+		expect(Date.now() - started).toBeLessThan(2000)
+	})
+
+	it('stop at once, too, if it was cancelled before it started', async () => {
+		const cancel = new AbortController()
+		cancel.abort()
+
+		expect((await failureOf(client({ signal: cancel.signal }).getRooms())).message).toContain('cancelled')
+		expect(seen).toHaveLength(0)
+	})
+
 	it('give up when TouchPoint takes too long', async () => {
 		reply = () => ({ ...envelope({ ok: true, scriptVersion: '1.2.0' }), delayMs: 3000 })
 

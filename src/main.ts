@@ -50,6 +50,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	private pollTimer: NodeJS.Timeout | undefined
 	private tickTimer: NodeJS.Timeout | undefined
 	private debounceTimer: NodeJS.Timeout | undefined
+	private requests = new AbortController() // cancels the requests to TouchPoint that are still running, when stopped
 	private generation = 0 // incremented whenever the connection is restarted, so that stale requests are ignored.
 
 	constructor(internal: unknown) {
@@ -175,6 +176,10 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 	private stop(): void {
 		this.generation++
+		// Nobody is waiting for what is still on its way from TouchPoint (the results would be ignored anyway), so don't
+		// leave those connections open until they time out.
+		this.requests.abort()
+		this.requests = new AbortController()
 		clearTimeout(this.pollTimer)
 		clearTimeout(this.debounceTimer)
 		clearInterval(this.tickTimer)
@@ -198,6 +203,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 			password: this.secrets.password ?? '',
 			scriptName: this.config.scriptName,
 			requestTimeoutMs: this.config.requestTimeoutMs,
+			signal: this.requests.signal,
 		})
 	}
 

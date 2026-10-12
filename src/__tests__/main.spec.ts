@@ -590,3 +590,53 @@ describe('the "rooms being watched" variable', () => {
 		expect(watched(instance)).toBe('0')
 	})
 })
+
+describe('requests still running when the connection stops', () => {
+	/** A TouchPoint that never answers, remembering the signal of each request that was made to it. */
+	function unresponsiveTouchPoint() {
+		const signals: AbortSignal[] = []
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: string, init: { signal: AbortSignal }) => {
+				signals.push(init.signal)
+				return new Promise<Response>((_resolve, reject) => {
+					init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+				})
+			}),
+		)
+		return signals
+	}
+
+	it('are cancelled when the connection is removed, not left open until they time out', async () => {
+		const signals = unresponsiveTouchPoint()
+		const instance = await start()
+		expect(signals).toHaveLength(1)
+		expect(signals[0].aborted).toBe(false)
+
+		await instance.destroy()
+
+		expect(signals[0].aborted).toBe(true)
+	})
+
+	it('are cancelled when the settings change, and the new settings make a fresh request', async () => {
+		const signals = unresponsiveTouchPoint()
+		const instance = await start()
+
+		await instance.configUpdated(config({ host: 'other.example.org' }), { password: 'pw' })
+		await advance(0)
+
+		expect(signals).toHaveLength(2)
+		expect(signals[0].aborted).toBe(true)
+		expect(signals[1].aborted).toBe(false)
+	})
+
+	it('are not reported as a problem with TouchPoint, because nobody is waiting for them any more', async () => {
+		unresponsiveTouchPoint()
+		const instance = await start()
+		await instance.destroy()
+		await advance(0)
+
+		expect(statuses(instance).map((s) => s[0])).not.toContain('connection_failure')
+		expect(logged(instance, 'error')).toEqual([])
+	})
+})

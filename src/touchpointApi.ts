@@ -10,6 +10,8 @@ export type TouchPointClientOptions = {
 	requestTimeoutMs: number
 	/** Where TouchPoint is. Defaults to https://{host}; different only for testing. */
 	baseUrl?: string
+	/** Cancels any request in progress, and any made afterwards. For when nobody is waiting for the answer any more. */
+	signal?: AbortSignal
 	/** This module's version, which is also the version of the script it needs, and the script it installs to get it. Different only for testing. */
 	moduleVersion?: string
 	scriptSource?: string
@@ -37,6 +39,7 @@ export class TouchPointClient {
 	private readonly authorization: string
 	private readonly requestTimeoutMs: number
 	private readonly moduleVersion: string
+	private readonly cancel: AbortSignal | undefined
 	private readonly scriptSource: string
 
 	constructor(options: TouchPointClientOptions) {
@@ -48,6 +51,7 @@ export class TouchPointClient {
 		this.authorization = 'Basic ' + Buffer.from(`${options.username}:${options.password}`).toString('base64')
 		this.requestTimeoutMs = Math.max(1000, options.requestTimeoutMs)
 		this.moduleVersion = options.moduleVersion ?? MODULE_VERSION
+		this.cancel = options.signal
 		this.scriptSource = options.scriptSource ?? SCRIPT_SOURCE
 	}
 
@@ -123,9 +127,12 @@ export class TouchPointClient {
 		const abort = new AbortController()
 		const timeout = setTimeout(() => abort.abort(), this.requestTimeoutMs)
 
+		// Either the timeout or the caller's cancellation ends the exchange.
+		const signal = this.cancel ? AbortSignal.any([this.cancel, abort.signal]) : abort.signal
+
 		let envelope: Envelope
 		try {
-			envelope = await this.exchange(params, abort.signal)
+			envelope = await this.exchange(params, signal, abort.signal)
 		} finally {
 			clearTimeout(timeout)
 		}
@@ -151,8 +158,17 @@ export class TouchPointClient {
 		return parsed
 	}
 
-	/** Sends the request and reads the whole answer, so that `signal` (the timeout) applies to all of it. */
-	private async exchange(params: Record<string, string>, signal: AbortSignal): Promise<Envelope> {
+	/** Why an exchange stopped, if it was stopped from outside: cancelled by the caller, or timed out. */
+	private stoppedBecause(timeout: AbortSignal): string | undefined {
+		if (this.cancel?.aborted) return 'Request cancelled'
+		return timeout.aborted ? 'Request timed out' : undefined
+	}
+
+	/**
+	 * Sends the request and reads the whole answer, so that `signal` (the timeout, and the caller's cancellation) applies
+	 * to all of it.
+	 */
+	private async exchange(params: Record<string, string>, signal: AbortSignal, timeout: AbortSignal): Promise<Envelope> {
 		let response: Response
 		try {
 			response = await fetch(this.url, {
@@ -168,7 +184,7 @@ export class TouchPointClient {
 			})
 		} catch (e) {
 			throw new TouchPointError(
-				signal.aborted ? 'Request timed out' : `Could not reach TouchPoint: ${errorText(e)}`,
+				this.stoppedBecause(timeout) ?? `Could not reach TouchPoint: ${errorText(e)}`,
 				'connection',
 			)
 		}
@@ -190,7 +206,7 @@ export class TouchPointClient {
 			return (await response.json()) as Envelope
 		} catch (e) {
 			throw new TouchPointError(
-				signal.aborted ? 'Request timed out' : `Unexpected response from TouchPoint: ${errorText(e)}`,
+				this.stoppedBecause(timeout) ?? `Unexpected response from TouchPoint: ${errorText(e)}`,
 				'connection',
 			)
 		}
