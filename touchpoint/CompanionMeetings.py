@@ -5,6 +5,8 @@
 # Source: https://github.com/bitfocus/companion-module-touchpoint-meetings/blob/main/touchpoint/CompanionMeetings.py
 # Author: James at Tenth
 #
+# This is not an official TouchPoint product: it is not developed, endorsed, or supported by TouchPoint Software, Inc.
+#
 # This script is kept up to date by the Companion module, which carries a copy of it and installs it over this one
 # (the "updateScript" action below) when its version is newer.  The first installation is the only manual one.  Don't edit
 # this copy: changes will be overwritten.

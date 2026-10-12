@@ -113,7 +113,7 @@ describe('the repository’s address', () => {
 	})
 
 	it('is the only repository the documentation links to', () => {
-		for (const file of ['README.md', 'companion/HELP.md']) {
+		for (const file of ['README.md', 'DEVELOPMENT.md', 'companion/HELP.md']) {
 			const addresses = [
 				...read(file).matchAll(/https:\/\/github\.com\/[^/\s)]+\/companion-module-touchpoint-meetings/g),
 			]
@@ -152,7 +152,7 @@ describe('the tools the module is built with', () => {
 })
 
 describe('the documentation', () => {
-	const docs = ['README.md', 'companion/HELP.md'].map((file) => ({ file, text: read(file) }))
+	const docs = ['README.md', 'DEVELOPMENT.md', 'companion/HELP.md'].map((file) => ({ file, text: read(file) }))
 
 	it('points at the script where it is', () => {
 		expect(existsSync(new URL(SCRIPT_PATH, root))).toBe(true)
@@ -162,6 +162,23 @@ describe('the documentation', () => {
 	it('does not write down version numbers, which would go out of date', () => {
 		for (const { file, text } of docs) {
 			expect(text.match(/\bv?\d+\.\d+\.\d+\b/g) ?? [], file).toEqual([])
+		}
+	})
+
+	it('says that this is not an official TouchPoint product, where people will read it', () => {
+		// This module is an independent project, not made, endorsed, or supported by TouchPoint Software, Inc. Anyone
+		// who finds it should be told so wherever they meet it: the README, the help in Companion, and the script that
+		// is installed into their TouchPoint.
+		const places = {
+			'README.md': read('README.md'),
+			'companion/HELP.md': read('companion/HELP.md'),
+			[SCRIPT_PATH]: script,
+		}
+		for (const [file, text] of Object.entries(places)) {
+			expect(text, file).toMatch(
+				/not (an official TouchPoint product|developed, endorsed, or supported by TouchPoint Software, Inc)/,
+			)
+			expect(text, file).toContain('TouchPoint Software, Inc.')
 		}
 	})
 })
