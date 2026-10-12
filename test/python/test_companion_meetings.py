@@ -127,6 +127,92 @@ class TimeZoneTest(unittest.TestCase):
         self.assertEqual(run.result["utcOffsetMinutes"], -300)  # TimeZoneInfo.Local in the harness
 
 
+class DaylightSavingTest(unittest.TestCase):
+    """Each reservation is converted to UTC for itself, by the rules of the time zone for its own date, because the range
+    that is fetched (an hour back, a day or more ahead) can contain a change of clocks.  One offset for the moment of the
+    request, applied to all of them, would be an hour out for every reservation on the other side of the change."""
+
+    # Eastern time in 2026: clocks go forward at 2 AM on March 8 (so 2:00 to 3:00 doesn't exist), and back at 2 AM on
+    # November 1 (so 1:00 to 2:00 happens twice).  The tests treat "now" as the day before the first change, so that the
+    # offset right now (UTC-5) is not the offset of a reservation after it (UTC-4).
+    BEFORE_SPRING = datetime.datetime(2026, 3, 7, 12, 0)
+    BEFORE_FALL = datetime.datetime(2026, 10, 31, 12, 0)
+
+    def converted(self, utc_now, *starts_and_ends, **kwargs):
+        rows = []
+        for number, (start, end) in enumerate(starts_and_ends, 1):
+            rows.append(Row(ReservationId=number, ReservableId=3, MeetingId=number, Name="Meeting",
+                            MeetingStart=FakeDateTime(start), MeetingEnd=FakeDateTime(end),
+                            SetupMinutes=0, TeardownMinutes=0))
+        run = run_script({"a": "windows", "rooms": "3"}, reservations=rows, utc_now=utc_now, **kwargs)
+        self.assertTrue(run.result["ok"], run.result)
+        return [(w["startUtc"], w["endUtc"]) for w in run.result["windows"]]
+
+    def test_each_time_is_converted_by_the_offset_of_its_own_date(self):
+        converted = self.converted(
+            self.BEFORE_SPRING,
+            (datetime.datetime(2026, 3, 7, 22, 0), datetime.datetime(2026, 3, 7, 23, 0)),  # before: UTC-5
+            (datetime.datetime(2026, 3, 8, 9, 0), datetime.datetime(2026, 3, 8, 10, 0)),  # after: UTC-4
+        )
+        self.assertEqual(converted, [
+            ("2026-03-08T03:00:00Z", "2026-03-08T04:00:00Z"),
+            ("2026-03-08T13:00:00Z", "2026-03-08T14:00:00Z"),
+        ])
+
+    def test_a_meeting_that_runs_across_the_change_is_as_long_as_it_really_is(self):
+        # 1 AM to 4 AM on the clock, but the clock skipped an hour, so it is two hours long.
+        converted = self.converted(
+            self.BEFORE_SPRING, (datetime.datetime(2026, 3, 8, 1, 0), datetime.datetime(2026, 3, 8, 4, 0)))
+        self.assertEqual(converted, [("2026-03-08T06:00:00Z", "2026-03-08T08:00:00Z")])
+
+    def test_a_time_that_does_not_exist_is_taken_to_be_an_hour_later(self):
+        # 2:30 AM on the day clocks go forward never happens; it is read as the same moment as 3:30 AM.
+        converted = self.converted(
+            self.BEFORE_SPRING, (datetime.datetime(2026, 3, 8, 2, 30), datetime.datetime(2026, 3, 8, 3, 30)))
+        self.assertEqual(converted, [("2026-03-08T07:30:00Z", "2026-03-08T07:30:00Z")])
+
+    def test_the_fall_change(self):
+        converted = self.converted(
+            self.BEFORE_FALL,
+            (datetime.datetime(2026, 11, 1, 0, 30), datetime.datetime(2026, 11, 1, 0, 45)),  # still daylight time: UTC-4
+            (datetime.datetime(2026, 11, 1, 3, 0), datetime.datetime(2026, 11, 1, 4, 0)),  # standard time: UTC-5
+        )
+        self.assertEqual(converted, [
+            ("2026-11-01T04:30:00Z", "2026-11-01T04:45:00Z"),
+            ("2026-11-01T08:00:00Z", "2026-11-01T09:00:00Z"),
+        ])
+
+    def test_a_meeting_across_the_fall_change_is_as_long_as_it_really_is(self):
+        # 12:30 AM to 3 AM on the clock, but the 1 AM hour happened twice, so it is three and a half hours long.
+        converted = self.converted(
+            self.BEFORE_FALL, (datetime.datetime(2026, 11, 1, 0, 30), datetime.datetime(2026, 11, 1, 3, 0)))
+        self.assertEqual(converted, [("2026-11-01T04:30:00Z", "2026-11-01T08:00:00Z")])
+
+    def test_a_time_that_happens_twice_is_taken_to_be_the_second_time(self):
+        # 1:30 AM on the day clocks go back is either of two moments; the later one (standard time) is used, as .NET does.
+        converted = self.converted(
+            self.BEFORE_FALL, (datetime.datetime(2026, 11, 1, 1, 30), datetime.datetime(2026, 11, 1, 2, 30)))
+        self.assertEqual(converted, [("2026-11-01T06:30:00Z", "2026-11-01T07:30:00Z")])
+
+    def test_a_zone_without_daylight_saving_time_is_the_same_all_year(self):
+        converted = self.converted(
+            self.BEFORE_SPRING,
+            (datetime.datetime(2026, 1, 15, 10, 0), datetime.datetime(2026, 1, 15, 11, 0)),
+            (datetime.datetime(2026, 7, 15, 10, 0), datetime.datetime(2026, 7, 15, 11, 0)),
+            settings={"LocalTimeZone": "Central Standard Time"},  # fixed at UTC-5 in these tests
+        )
+        self.assertEqual(converted, [("2026-01-15T15:00:00Z", "2026-01-15T16:00:00Z"),
+                                     ("2026-07-15T15:00:00Z", "2026-07-15T16:00:00Z")])
+
+    def test_the_local_times_are_still_reported_for_diagnosing_problems(self):
+        rows = [Row(ReservationId=1, ReservableId=3, MeetingId=1, Name="Meeting", SetupMinutes=0, TeardownMinutes=0,
+                    MeetingStart=FakeDateTime(datetime.datetime(2026, 3, 8, 9, 0)),
+                    MeetingEnd=FakeDateTime(datetime.datetime(2026, 3, 8, 10, 0)))]
+        window = run_script({"a": "windows", "rooms": "3"}, reservations=rows, utc_now=self.BEFORE_SPRING).result["windows"][0]
+
+        self.assertEqual((window["start"], window["end"]), ("2026-03-08T09:00:00", "2026-03-08T10:00:00"))
+
+
 class DispatchTest(unittest.TestCase):
     def test_opened_in_a_browser_it_says_it_is_ready(self):
         run = run_script({})

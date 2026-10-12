@@ -10,7 +10,7 @@ export type VariablesSchema = {
 export function UpdateVariableDefinitions(self: ModuleInstance): void {
 	self.setVariableDefinitions({
 		rooms_loaded: { name: 'Number of rooms known from TouchPoint' },
-		monitored_rooms: { name: 'Number of rooms being watched by feedbacks' },
+		monitored_rooms: { name: 'Number of rooms being watched by feedbacks, including the rooms inside them' },
 		upcoming_reservations: { name: 'Number of current and upcoming reservations for watched rooms' },
 		last_refresh_time: { name: 'Last successful refresh from TouchPoint (ISO)' },
 	})

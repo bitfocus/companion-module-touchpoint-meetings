@@ -36,6 +36,7 @@ const OLDER_SCRIPT = '0.0.1' // older than any real version of the module
 const NOW = Date.UTC(2026, 9, 4, 21, 30) // 17:30 in the church's time zone, which is UTC-4 in the tests
 const UTC_OFFSET_MINUTES = -240
 
+const utc = (ms: number) => new Date(ms).toISOString().slice(0, 19) + 'Z'
 const naive = (ms: number) => new Date(ms + UTC_OFFSET_MINUTES * MIN).toISOString().slice(0, 19)
 
 type FakeRoom = { id: number; parentId: number | null; name: string }
@@ -50,6 +51,8 @@ function reservation(roomId: number, startsIn: number, endsIn: number, setup = 0
 		name,
 		start: naive(NOW + startsIn * MIN),
 		end: naive(NOW + endsIn * MIN),
+		startUtc: utc(NOW + startsIn * MIN),
+		endUtc: utc(NOW + endsIn * MIN),
 		setupMinutes: setup,
 		teardownMinutes: teardown,
 	}
@@ -95,6 +98,14 @@ const touchpoint = {
 
 		if (a === 'updateScript') {
 			if (!this.canUpdateItself) return reply({ ok: false, error: 'unknown action' })
+			// The real script refuses a copy that isn't newer than the one it is.
+			if (this.deployedVersion === MODULE_VERSION) {
+				return reply({
+					ok: false,
+					...version,
+					error: 'not updated: the script is not newer than the installed version',
+				})
+			}
 			const updatedFrom = this.deployedVersion
 			this.deployedVersion = MODULE_VERSION
 			return reply({ ok: true, scriptVersion: MODULE_VERSION, updatedFrom, updatedTo: MODULE_VERSION })
@@ -549,5 +560,213 @@ describe('keeping the script in TouchPoint up to date', () => {
 		touchpoint.unreachable = true
 		await start()
 		expect(touchpoint.count('updateScript')).toBe(0)
+	})
+})
+
+describe('the "rooms being watched" variable', () => {
+	// The fake TouchPoint has a room 3 (Sanctuary) with a room 4 (Balcony) inside it.
+	const watched = (instance: ModuleInstance) =>
+		vi.mocked(instance.setVariableValues).mock.calls.at(-1)?.[0]?.monitored_rooms
+
+	it('counts the rooms inside a room that is watched with its rooms included', async () => {
+		const instance = await start()
+		instance.evaluatePhases('fb', watch([3], { includeChildren: true }), ['event'])
+		await advance(600)
+
+		expect(watched(instance)).toBe('2')
+	})
+
+	it('counts only the room itself when its rooms are not included', async () => {
+		const instance = await start()
+		instance.evaluatePhases('fb', watch([3]), ['event'])
+		await advance(600)
+
+		expect(watched(instance)).toBe('1')
+	})
+
+	it('counts each room once, however many feedbacks watch it', async () => {
+		const instance = await start()
+		instance.evaluatePhases('a', watch([3], { includeChildren: true }), ['event'])
+		instance.evaluatePhases('b', watch([4]), ['setup'])
+		instance.evaluatePhases('c', watch([3, 4]), ['teardown'])
+		await advance(600)
+
+		expect(watched(instance)).toBe('2')
+	})
+
+	it('is nothing when no feedback is watching a room', async () => {
+		const instance = await start()
+		await advance(600)
+
+		expect(watched(instance)).toBe('0')
+	})
+})
+
+describe('requests still running when the connection stops', () => {
+	/** A TouchPoint that never answers, remembering the signal of each request that was made to it. */
+	function unresponsiveTouchPoint() {
+		const signals: AbortSignal[] = []
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: string, init: { signal: AbortSignal }) => {
+				signals.push(init.signal)
+				return new Promise<Response>((_resolve, reject) => {
+					init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+				})
+			}),
+		)
+		return signals
+	}
+
+	it('are cancelled when the connection is removed, not left open until they time out', async () => {
+		const signals = unresponsiveTouchPoint()
+		const instance = await start()
+		expect(signals).toHaveLength(1)
+		expect(signals[0].aborted).toBe(false)
+
+		await instance.destroy()
+
+		expect(signals[0].aborted).toBe(true)
+	})
+
+	it('are cancelled when the settings change, and the new settings make a fresh request', async () => {
+		const signals = unresponsiveTouchPoint()
+		const instance = await start()
+
+		await instance.configUpdated(config({ host: 'other.example.org' }), { password: 'pw' })
+		await advance(0)
+
+		expect(signals).toHaveLength(2)
+		expect(signals[0].aborted).toBe(true)
+		expect(signals[1].aborted).toBe(false)
+	})
+
+	it('are not reported as a problem with TouchPoint, because nobody is waiting for them any more', async () => {
+		unresponsiveTouchPoint()
+		const instance = await start()
+		await instance.destroy()
+		await advance(0)
+
+		expect(statuses(instance).map((s) => s[0])).not.toContain('connection_failure')
+		expect(logged(instance, 'error')).toEqual([])
+	})
+})
+
+describe('refreshes that overlap', () => {
+	/**
+	 * A TouchPoint whose answers are held until the test lets them through, so that requests can be made to overlap in a
+	 * chosen order. Each request is answered by the ordinary fake TouchPoint as soon as it is made; what is held is the
+	 * answer's journey back.
+	 */
+	function heldTouchPoint() {
+		const held: { action: string; params: URLSearchParams; release: () => void }[] = []
+		let outstanding = 0
+		let mostAtOnce = 0
+
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string, init: { body: string }) => {
+				const params = new URLSearchParams(init.body)
+				outstanding++
+				mostAtOnce = Math.max(mostAtOnce, outstanding)
+				// TouchPoint answers when the request arrives, as it really does; only getting the answer back is held up.
+				const answer = touchpoint.respond(url, init.body)
+				await new Promise<void>((release) => held.push({ action: params.get('a') ?? '', params, release }))
+				outstanding--
+				return answer
+			}),
+		)
+
+		return {
+			held,
+			actionsHeld: () => held.map((h) => h.action),
+			mostAtOnce: () => mostAtOnce,
+			/** Lets the answer to the most recently started request through, and lets what that sets off happen. */
+			async releaseNewest() {
+				held.pop()?.release()
+				await advance(0)
+			},
+			async releaseAll() {
+				while (held.length > 0) await this.releaseNewest()
+			},
+		}
+	}
+
+	async function startWithoutWaiting() {
+		const instance = new ModuleInstance({})
+		instances.push(instance)
+		await instance.init(config(), true, { password: 'pw' }) // the first refresh asks for the room list, and is held
+		return instance
+	}
+
+	it('never run at the same time, and the one that has to wait is run once the first is done', async () => {
+		const touchpointAnswers = heldTouchPoint()
+		const instance = await startWithoutWaiting()
+
+		// A feedback is added while the first refresh is still waiting for the room list, and its quick refresh falls due.
+		instance.evaluatePhases('fb', watch([3], { includeChildren: true }), ['event'])
+		await advance(600)
+		expect(touchpointAnswers.actionsHeld()).toEqual(['rooms']) // just the one
+
+		await touchpointAnswers.releaseNewest() // the room list arrives
+		expect(touchpointAnswers.actionsHeld()).toEqual(['windows'])
+		// ...and the refresh that waited has the room list to work with, so "include rooms inside" has something to expand.
+		expect(touchpointAnswers.held[0].params.get('rooms')).toBe('3,4')
+
+		await touchpointAnswers.releaseAll()
+		expect(touchpointAnswers.mostAtOnce()).toBe(1)
+	})
+
+	it('do not make a feedback turn off and on again, whichever answer comes back first', async () => {
+		touchpoint.reservations = [reservation(4, -10, 50)] // a meeting is on in room 4
+		const touchpointAnswers = heldTouchPoint()
+		const instance = await startWithoutWaiting()
+		await touchpointAnswers.releaseNewest() // the room list arrives, and nothing is watched yet
+
+		// One feedback is added, and its refresh is under way (and held)...
+		instance.evaluatePhases('a', watch([3]), ['event'])
+		await advance(600)
+		// ...then another, for the room with the meeting in it, while that is still going on.
+		instance.evaluatePhases('b', watch([4]), ['event'])
+		await advance(600)
+
+		// The worst order: the newest answer is let through first, and then any older one.
+		await touchpointAnswers.releaseAll()
+
+		expect(instance.evaluatePhases('b', watch([4]), ['event'])).toBe(true)
+		const changesToB = vi.mocked(instance.checkFeedbacksById).mock.calls.filter((call) => call.includes('b'))
+		expect(changesToB).toHaveLength(1) // it came on, and stayed on: an automation sees one change, not two
+	})
+
+	it('do not upload the script twice, which would show a script update that worked as a settings error', async () => {
+		touchpoint.deployedVersion = OLDER_SCRIPT
+		const touchpointAnswers = heldTouchPoint()
+		const instance = await startWithoutWaiting()
+		instance.evaluatePhases('fb', watch([3]), ['event'])
+		await advance(600)
+
+		await touchpointAnswers.releaseAll()
+
+		expect(touchpoint.count('updateScript')).toBe(1)
+		expect(statuses(instance).map((status) => status[0])).not.toContain('bad_config')
+		expect(lastStatus(instance)).toEqual(['ok'])
+	})
+
+	it('are still all done: the Refresh action returns once the refresh it asked for has run', async () => {
+		const touchpointAnswers = heldTouchPoint()
+		const instance = await startWithoutWaiting()
+		await touchpointAnswers.releaseNewest() // the first refresh is done
+		const before = touchpoint.count('rooms')
+
+		let finished = false
+		const refreshed = instance.refreshNow().then(() => (finished = true))
+		await advance(0)
+		expect(finished).toBe(false)
+		expect(touchpointAnswers.actionsHeld()).toEqual(['rooms'])
+
+		await touchpointAnswers.releaseAll()
+		await refreshed
+		expect(finished).toBe(true)
+		expect(touchpoint.count('rooms')).toBe(before + 1)
 	})
 })

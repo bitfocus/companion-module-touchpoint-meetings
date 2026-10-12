@@ -10,10 +10,15 @@ export type TouchPointClientOptions = {
 	requestTimeoutMs: number
 	/** Where TouchPoint is. Defaults to https://{host}; different only for testing. */
 	baseUrl?: string
+	/** Cancels any request in progress, and any made afterwards. For when nobody is waiting for the answer any more. */
+	signal?: AbortSignal
 	/** This module's version, which is also the version of the script it needs, and the script it installs to get it. Different only for testing. */
 	moduleVersion?: string
 	scriptSource?: string
 }
+
+/** What TouchPoint's Python API answers with: what the script printed, and the data it set. */
+type Envelope = { output?: unknown; data?: { result?: unknown } }
 
 export class TouchPointError extends Error {
 	constructor(
@@ -34,6 +39,7 @@ export class TouchPointClient {
 	private readonly authorization: string
 	private readonly requestTimeoutMs: number
 	private readonly moduleVersion: string
+	private readonly cancel: AbortSignal | undefined
 	private readonly scriptSource: string
 
 	constructor(options: TouchPointClientOptions) {
@@ -45,6 +51,7 @@ export class TouchPointClient {
 		this.authorization = 'Basic ' + Buffer.from(`${options.username}:${options.password}`).toString('base64')
 		this.requestTimeoutMs = Math.max(1000, options.requestTimeoutMs)
 		this.moduleVersion = options.moduleVersion ?? MODULE_VERSION
+		this.cancel = options.signal
 		this.scriptSource = options.scriptSource ?? SCRIPT_SOURCE
 	}
 
@@ -69,7 +76,7 @@ export class TouchPointClient {
 		roomIds: number[],
 		backMinutes: number,
 		aheadMinutes: number,
-	): Promise<{ windows: RoomWindow[]; clock: ServerClock; offsetMs: number }> {
+	): Promise<{ windows: RoomWindow[]; clock: ServerClock; offsetMs: number | undefined }> {
 		const result = await this.call({
 			a: 'windows',
 			rooms: roomIds.join(','),
@@ -77,21 +84,18 @@ export class TouchPointClient {
 			ahead: String(Math.round(aheadMinutes)),
 		})
 		const clock = parseClock(result.now)
-		// Reservation times are in the church's local time; the script reports how far that is from UTC, from
-		// TouchPoint's LocalTimeZone setting. (The database and server clock can be in a different zone.)
-		const offsetMinutes = Number(result.utcOffsetMinutes)
-		if (result.utcOffsetMinutes === undefined || !Number.isFinite(offsetMinutes)) {
-			throw new TouchPointError(
-				'The script did not report a time zone offset. Update the CompanionMeetings script.',
-				'connection',
-			)
-		}
-		const offsetMs = offsetMinutes * 60_000
+		// Reservation times are stored in the church's local time. The script converts each one to UTC itself, by the
+		// rules of TouchPoint's LocalTimeZone for that reservation's own date, because the range that is fetched can
+		// contain a change of clocks for daylight saving time, and one offset for all of them would be an hour out on one
+		// side of it. (The database and server clock can be in a different zone, which is why it isn't taken from them.)
+		// The offset it reports as well is how far local time is from UTC right now, and is only for diagnosing problems.
+		const offsetMinutes = result.utcOffsetMinutes === undefined ? Number.NaN : Number(result.utcOffsetMinutes)
+		const offsetMs = Number.isFinite(offsetMinutes) ? offsetMinutes * 60_000 : undefined
 
 		const windows: RoomWindow[] = []
 		for (const w of asArray(result.windows)) {
-			const startMs = parseNaive(w.start) - offsetMs
-			const endMs = parseNaive(w.end) - offsetMs
+			const startMs = parseUtc(w.startUtc)
+			const endMs = parseUtc(w.endUtc)
 			if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) continue
 			windows.push({
 				reservationId: Number(w.reservationId),
@@ -114,49 +118,20 @@ export class TouchPointClient {
 	}
 
 	private async call(params: Record<string, string>, checkVersion = true): Promise<Record<string, unknown>> {
+		// One timer for the whole exchange, until the answer has been read, not only until it starts to arrive: TouchPoint
+		// can begin to answer and then stall, and a timeout that had stopped by then would leave the request waiting for
+		// as long as Node does by default (about five minutes), with everything that waits on it.
 		const abort = new AbortController()
 		const timeout = setTimeout(() => abort.abort(), this.requestTimeoutMs)
 
-		let response: Response
+		// Either the timeout or the caller's cancellation ends the exchange.
+		const signal = this.cancel ? AbortSignal.any([this.cancel, abort.signal]) : abort.signal
+
+		let envelope: Envelope
 		try {
-			response = await fetch(this.url, {
-				method: 'POST',
-				signal: abort.signal,
-				headers: {
-					Authorization: this.authorization,
-					Accept: 'application/json',
-					'Content-Type': 'application/x-www-form-urlencoded',
-				},
-				body: new URLSearchParams(params).toString(),
-				redirect: 'manual', // a bad login redirects to an HTML sign-in page.
-			})
-		} catch (e) {
-			throw new TouchPointError(
-				abort.signal.aborted ? 'Request timed out' : `Could not reach TouchPoint: ${errorText(e)}`,
-				'connection',
-			)
+			envelope = await this.exchange(params, signal, abort.signal)
 		} finally {
 			clearTimeout(timeout)
-		}
-
-		if (response.status === 401 || response.status === 403 || (response.status >= 300 && response.status < 400)) {
-			throw new TouchPointError(
-				'TouchPoint rejected the credentials. The user needs the Developer and APIOnly roles.',
-				'auth',
-			)
-		}
-		if (response.status === 404) {
-			throw new TouchPointError('Script not found. Check the script name, and that it begins with #API.', 'connection')
-		}
-		if (!response.ok) {
-			throw new TouchPointError(`TouchPoint returned HTTP ${response.status}`, 'connection')
-		}
-
-		let envelope: { output?: unknown; data?: { result?: unknown } }
-		try {
-			envelope = (await response.json()) as { output?: unknown; data?: { result?: unknown } }
-		} catch (e) {
-			throw new TouchPointError(`Unexpected response from TouchPoint: ${errorText(e)}`, 'connection')
 		}
 
 		const result = envelope.data?.result
@@ -178,6 +153,60 @@ export class TouchPointClient {
 			throw new TouchPointError(`The script reported an error: ${text(parsed.error, 'unknown')}`, 'connection')
 		}
 		return parsed
+	}
+
+	/** Why an exchange stopped, if it was stopped from outside: cancelled by the caller, or timed out. */
+	private stoppedBecause(timeout: AbortSignal): string | undefined {
+		if (this.cancel?.aborted) return 'Request cancelled'
+		return timeout.aborted ? 'Request timed out' : undefined
+	}
+
+	/**
+	 * Sends the request and reads the whole answer, so that `signal` (the timeout, and the caller's cancellation) applies
+	 * to all of it.
+	 */
+	private async exchange(params: Record<string, string>, signal: AbortSignal, timeout: AbortSignal): Promise<Envelope> {
+		let response: Response
+		try {
+			response = await fetch(this.url, {
+				method: 'POST',
+				signal,
+				headers: {
+					Authorization: this.authorization,
+					Accept: 'application/json',
+					'Content-Type': 'application/x-www-form-urlencoded',
+				},
+				body: new URLSearchParams(params).toString(),
+				redirect: 'manual', // a bad login redirects to an HTML sign-in page.
+			})
+		} catch (e) {
+			throw new TouchPointError(
+				this.stoppedBecause(timeout) ?? `Could not reach TouchPoint: ${errorText(e)}`,
+				'connection',
+			)
+		}
+
+		if (response.status === 401 || response.status === 403 || (response.status >= 300 && response.status < 400)) {
+			throw new TouchPointError(
+				'TouchPoint rejected the credentials. The user needs the Developer and APIOnly roles.',
+				'auth',
+			)
+		}
+		if (response.status === 404) {
+			throw new TouchPointError('Script not found. Check the script name, and that it begins with #API.', 'connection')
+		}
+		if (!response.ok) {
+			throw new TouchPointError(`TouchPoint returned HTTP ${response.status}`, 'connection')
+		}
+
+		try {
+			return (await response.json()) as Envelope
+		} catch (e) {
+			throw new TouchPointError(
+				this.stoppedBecause(timeout) ?? `Unexpected response from TouchPoint: ${errorText(e)}`,
+				'connection',
+			)
+		}
 	}
 
 	/**
@@ -218,6 +247,13 @@ function text(value: unknown, fallback: string): string {
 
 function errorText(e: unknown): string {
 	return e instanceof Error ? e.message : String(e)
+}
+
+/** Reads "2026-10-04T14:30:00Z", a time that says it is UTC. NaN if it isn't one (a missing "Z" would make it local). */
+function parseUtc(value: unknown): number {
+	return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)
+		? Date.parse(value)
+		: Number.NaN
 }
 
 /** Reads "2026-10-04T09:30:00" as if it were UTC */
