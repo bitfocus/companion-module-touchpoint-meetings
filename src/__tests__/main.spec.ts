@@ -551,3 +551,42 @@ describe('keeping the script in TouchPoint up to date', () => {
 		expect(touchpoint.count('updateScript')).toBe(0)
 	})
 })
+
+describe('the "rooms being watched" variable', () => {
+	// The fake TouchPoint has a room 3 (Sanctuary) with a room 4 (Balcony) inside it.
+	const watched = (instance: ModuleInstance) =>
+		vi.mocked(instance.setVariableValues).mock.calls.at(-1)?.[0]?.monitored_rooms
+
+	it('counts the rooms inside a room that is watched with its rooms included', async () => {
+		const instance = await start()
+		instance.evaluatePhases('fb', watch([3], { includeChildren: true }), ['event'])
+		await advance(600)
+
+		expect(watched(instance)).toBe('2')
+	})
+
+	it('counts only the room itself when its rooms are not included', async () => {
+		const instance = await start()
+		instance.evaluatePhases('fb', watch([3]), ['event'])
+		await advance(600)
+
+		expect(watched(instance)).toBe('1')
+	})
+
+	it('counts each room once, however many feedbacks watch it', async () => {
+		const instance = await start()
+		instance.evaluatePhases('a', watch([3], { includeChildren: true }), ['event'])
+		instance.evaluatePhases('b', watch([4]), ['setup'])
+		instance.evaluatePhases('c', watch([3, 4]), ['teardown'])
+		await advance(600)
+
+		expect(watched(instance)).toBe('2')
+	})
+
+	it('is nothing when no feedback is watching a room', async () => {
+		const instance = await start()
+		await advance(600)
+
+		expect(watched(instance)).toBe('0')
+	})
+})

@@ -356,7 +356,10 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 	private pushVariableValues(): void {
 		const watched = new Set<number>()
-		for (const sub of this.subscriptions.values()) sub.watch.roomIds.forEach((id) => watched.add(id))
+		// The rooms that are actually watched: the ones chosen, and the rooms inside them where that is turned on.
+		for (const sub of this.subscriptions.values()) {
+			for (const id of expandRoomIds(sub.watch, this.rooms)) watched.add(id)
+		}
 
 		this.setVariableValues({
 			rooms_loaded: String(this.rooms.length),
