@@ -770,3 +770,129 @@ describe('refreshes that overlap', () => {
 		expect(touchpoint.count('rooms')).toBe(before + 1)
 	})
 })
+
+describe('the refresh interval', () => {
+	/** Asks for a room's reservations, as a feedback does, and lets the quick refresh that follows happen. */
+	async function watchRoom(instance: ModuleInstance) {
+		instance.evaluatePhases('fb', watch([3]), ['event'])
+		await advance(600)
+	}
+
+	describe('when it is set', () => {
+		it('is how often reservations are refreshed', async () => {
+			const instance = await start({ pollIntervalSeconds: 60 })
+			await watchRoom(instance)
+			expect(touchpoint.count('windows')).toBe(1)
+
+			await advance(58_000)
+			expect(touchpoint.count('windows')).toBe(1)
+			await advance(3_000)
+			expect(touchpoint.count('windows')).toBe(2)
+		})
+
+		it('is never faster than every 10 seconds, even if set to less', async () => {
+			const instance = await start({ pollIntervalSeconds: 3 })
+			await watchRoom(instance)
+
+			await advance(8_000)
+			expect(touchpoint.count('windows')).toBe(1)
+			await advance(3_000)
+			expect(touchpoint.count('windows')).toBe(2)
+		})
+
+		it.each([undefined, Number.NaN])('is 30 seconds when it has no sensible value (%s)', async (missing) => {
+			const instance = await start({ pollIntervalSeconds: missing as unknown as number })
+			await watchRoom(instance)
+
+			await advance(28_000)
+			expect(touchpoint.count('windows')).toBe(1)
+			await advance(3_000)
+			expect(touchpoint.count('windows')).toBe(2)
+		})
+	})
+
+	describe('when it is 0, automatic refreshing is off, so', () => {
+		it('reservations are read when the connection starts, and then not again by themselves', async () => {
+			const instance = await start({ pollIntervalSeconds: 0 })
+			await watchRoom(instance)
+			expect(touchpoint.count('rooms')).toBe(1)
+			expect(touchpoint.count('windows')).toBe(1)
+
+			await advance(30 * MIN)
+
+			expect(touchpoint.count('rooms')).toBe(1)
+			expect(touchpoint.count('windows')).toBe(1)
+			expect(lastStatus(instance)).toEqual(['ok'])
+		})
+
+		it('the times that are already known are still applied to the second', async () => {
+			touchpoint.reservations = [reservation(3, 10, 70)]
+			const instance = await start({ pollIntervalSeconds: 0 })
+			await watchRoom(instance)
+			expect(instance.evaluatePhases('fb', watch([3]), ['event'])).toBe(false)
+
+			await advance(11 * MIN)
+			expect(instance.evaluatePhases('fb', watch([3]), ['event'])).toBe(true)
+			expect(touchpoint.count('windows')).toBe(1)
+		})
+
+		it('adding a feedback still reads the reservations it needs', async () => {
+			const instance = await start({ pollIntervalSeconds: 0 })
+			expect(touchpoint.count('windows')).toBe(0)
+
+			await watchRoom(instance)
+			expect(touchpoint.count('windows')).toBe(1)
+		})
+
+		it('the Refresh action still refreshes, including the room list', async () => {
+			const instance = await start({ pollIntervalSeconds: 0 })
+			await watchRoom(instance)
+
+			await instance.refreshNow()
+
+			expect(touchpoint.count('rooms')).toBe(2)
+			expect(touchpoint.count('windows')).toBe(2)
+		})
+
+		it('a refresh that fails is retried until one works, and then it stops', async () => {
+			touchpoint.unreachable = true
+			const instance = await start({ pollIntervalSeconds: 0 })
+			expect(lastStatus(instance)?.[0]).toBe('connection_failure')
+
+			await advance(95_000) // retries at 30, 60 and 90 seconds
+			expect(touchpoint.count('rooms')).toBe(4)
+
+			touchpoint.unreachable = false
+			await advance(30_000)
+			expect(lastStatus(instance)).toEqual(['ok'])
+
+			const requests = touchpoint.requests.length
+			await advance(30 * MIN)
+			expect(touchpoint.requests).toHaveLength(requests)
+		})
+
+		it('a failure of the refresh that a new feedback causes is retried, too', async () => {
+			const instance = await start({ pollIntervalSeconds: 0 })
+			touchpoint.unreachable = true
+			await watchRoom(instance)
+			expect(lastStatus(instance)?.[0]).toBe('connection_failure')
+
+			touchpoint.unreachable = false
+			await advance(30_000)
+
+			expect(lastStatus(instance)).toEqual(['ok'])
+			expect(touchpoint.count('windows')).toBeGreaterThanOrEqual(2)
+		})
+
+		it('changing the interval from 0 to a number starts refreshing again', async () => {
+			const instance = await start({ pollIntervalSeconds: 0 })
+			await watchRoom(instance)
+			await instance.configUpdated(config({ pollIntervalSeconds: 30 }), { password: 'pw' })
+			await advance(0)
+			const before = touchpoint.count('windows')
+
+			await advance(65_000)
+			expect(touchpoint.count('windows')).toBeGreaterThan(before)
+		})
+	})
+})

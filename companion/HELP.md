@@ -61,7 +61,7 @@ There is only one version number to think about: the module's. The script in Tou
 - **Python Script Name**: `CompanionMeetings`, unless you named it something else.
 - **API Username / Password**: the user created above.
 - **Update the TouchPoint script automatically**: on by default. See _Keeping it up to date_ above.
-- **Refresh Interval**: how often reservations are re-read. Start and end times are applied to the second in between, so a short interval is only needed to pick up reservations that were just changed.
+- **Refresh Interval**: how often reservations are re-read, in seconds. Start and end times are applied to the second in between, so a short interval is only needed to pick up reservations that were just changed. It is never faster than every 10 seconds (1 to 9 count as 10). **Set it to 0 to turn automatic refreshing off**; see below.
 
 You only need one connection, however many rooms you use. Rooms are chosen in each feedback.
 
@@ -102,6 +102,14 @@ If TouchPoint becomes unreachable, the last known reservations stay in effect, s
 **Run something for the whole booking.** Select **Setup**, **Event (in use)** and **Teardown** together, so the condition is true from the start of setup to the end of teardown. Use one trigger on **On condition becoming true** to turn things on, and another on **On condition becoming false** to turn them off.
 
 **Show the room's status on a button.** Add a preset from **Room Status**, and choose its room in the feedback. To show the meeting's name, add a local variable of type **Feedback** to the button, choose **Name of the meeting using the room**, and use `$(local:name)` (or whatever you called it) in the button text.
+
+### Turning automatic refreshing off
+
+With **Refresh Interval** at 0, the module reads reservations when the connection starts, whenever you add or change a feedback that needs a room's reservations, and when you run the **Refresh from TouchPoint** action, and at no other time. Times it already knows are still applied to the second. So a reservation added or changed in TouchPoint afterwards is not seen until one of those happens, and the reservations it holds only reach about a day ahead.
+
+That suits a setup where you want to decide when TouchPoint is asked, for example a Companion trigger with a **Time interval** event that runs the **Refresh from TouchPoint** action every 10 minutes, or only at the start of the day.
+
+If a refresh fails while automatic refreshing is off (TouchPoint can't be reached when the connection starts, say), the module tries again every 30 seconds until one works, and then goes back to waiting. Otherwise the connection would stay in an error with nothing to put it right.
 
 ### Actions
 

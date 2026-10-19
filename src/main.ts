@@ -21,6 +21,9 @@ export type ModuleSchema = {
 export { UpgradeScripts }
 
 const ROOMS_REFRESH_MS = 10 * 60_000
+const DEFAULT_POLL_SECONDS = 30
+const MIN_POLL_SECONDS = 10
+const RETRY_WHEN_OFF_MS = 30_000 // how soon to try again after a failure, when automatic refreshing is off
 const DEFAULT_BACK_MINUTES = 60
 const DEFAULT_AHEAD_MINUTES = 1440
 
@@ -48,6 +51,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	private warnedAboutNewerScript: string | undefined // the newer script version already mentioned in the log
 
 	private pollTimer: NodeJS.Timeout | undefined
+	private lastRefreshFailed = false
 	private tickTimer: NodeJS.Timeout | undefined
 	private debounceTimer: NodeJS.Timeout | undefined
 	private refreshing: Promise<void> | undefined // the refresh that is running, with any that follow it
@@ -172,6 +176,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		this.roomsLoadedMs = 0
 		this.scriptUpdateProblem = undefined
 		this.warnedAboutNewerScript = undefined
+		this.lastRefreshFailed = false
 		this.tickTimer = setInterval(() => this.tick(), 1000)
 		void this.pollLoop(generation)
 	}
@@ -211,12 +216,37 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		})
 	}
 
+	/**
+	 * How long to wait between refreshes. Undefined if automatic refreshing is off, which is an interval of 0. Anything
+	 * else that isn't a sensible number of seconds is the default, and it is never faster than every 10 seconds.
+	 */
+	private pollDelayMs(): number | undefined {
+		const seconds = Number(this.config.pollIntervalSeconds)
+		if (seconds === 0) return undefined
+
+		return Math.max(MIN_POLL_SECONDS, seconds > 0 ? seconds : DEFAULT_POLL_SECONDS) * 1000
+	}
+
 	private async pollLoop(generation: number): Promise<void> {
+		this.pollTimer = undefined
 		await this.refresh(generation)
 		if (generation !== this.generation) return
 
-		const intervalMs = Math.max(10, this.config.pollIntervalSeconds || 30) * 1000
-		this.pollTimer = setTimeout(() => void this.pollLoop(generation), intervalMs)
+		// When automatic refreshing is off, there is nothing to schedule here: it only ever retries, after a failure.
+		const delayMs = this.pollDelayMs()
+		if (delayMs !== undefined) this.pollTimer = setTimeout(() => void this.pollLoop(generation), delayMs)
+	}
+
+	/**
+	 * With automatic refreshing off, nothing is refreshed unless it is asked for, so a refresh that fails (TouchPoint
+	 * unreachable when the connection starts, say) would leave the connection in an error with nothing to put it right.
+	 * So it tries again until one works. Once things are healthy, it goes back to doing nothing by itself.
+	 */
+	private retryIfAutomaticRefreshIsOff(generation: number): void {
+		if (generation !== this.generation || this.pollDelayMs() !== undefined) return
+		if (!this.lastRefreshFailed || this.pollTimer) return
+
+		this.pollTimer = setTimeout(() => void this.pollLoop(generation), RETRY_WHEN_OFF_MS)
 	}
 
 	private scheduleWindowsRefresh(): void {
@@ -262,6 +292,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 			await this.refreshOnce(generation, next.windowsOnly)
 			next = generation === this.generation ? this.refreshNext : undefined // stopped meanwhile: nothing to follow up
 		}
+		this.retryIfAutomaticRefreshIsOff(generation)
 	}
 
 	private async refreshOnce(generation: number, windowsOnly: boolean): Promise<void> {
@@ -276,6 +307,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 			}
 		} catch (error) {
 			if (generation !== this.generation) return
+			this.lastRefreshFailed = true
 			// Keep the last known reservations: times keep being applied while TouchPoint is unreachable.
 			const message = error instanceof Error ? error.message : String(error)
 			const kind = error instanceof TouchPointError ? error.kind : 'connection'
@@ -348,6 +380,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		this.windows = result?.windows ?? []
 
 		this.lastRefreshIso = new Date().toISOString()
+		this.lastRefreshFailed = false
 		this.updateStatus(InstanceStatus.Ok)
 		this.warnIfScriptIsNewer(client.newerScriptVersion)
 		this.pushVariableValues()

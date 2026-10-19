@@ -68,9 +68,9 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			id: 'pollIntervalSeconds',
 			label: 'Refresh Interval (seconds)',
 			tooltip:
-				'How often reservations are re-read from TouchPoint. Set to 0 to disable automatic refreshing (you can use the action to refresh manually).',
+				'How often reservations are re-read from TouchPoint. Set to 0 to disable automatic refreshing (you can use the action to refresh manually). Values from 1 to 9 count as 10.',
 			width: 6,
-			min: 10,
+			min: 0,
 			max: 600,
 			default: 30,
 		},
