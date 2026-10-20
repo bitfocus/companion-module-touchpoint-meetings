@@ -21,6 +21,9 @@ export type ModuleSchema = {
 export { UpgradeScripts }
 
 const ROOMS_REFRESH_MS = 10 * 60_000
+const DEFAULT_POLL_SECONDS = 30
+const MIN_POLL_SECONDS = 10
+const RETRY_WHEN_OFF_MS = 30_000 // how soon to try again after a failure, when automatic refreshing is off
 const DEFAULT_BACK_MINUTES = 60
 const DEFAULT_AHEAD_MINUTES = 1440
 
@@ -48,8 +51,12 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	private warnedAboutNewerScript: string | undefined // the newer script version already mentioned in the log
 
 	private pollTimer: NodeJS.Timeout | undefined
+	private lastRefreshFailed = false
 	private tickTimer: NodeJS.Timeout | undefined
 	private debounceTimer: NodeJS.Timeout | undefined
+	private refreshing: Promise<void> | undefined // the refresh that is running, with any that follow it
+	private refreshNext: { windowsOnly: boolean } | undefined // what to refresh next, if asked while one was running
+	private requests = new AbortController() // cancels the requests to TouchPoint that are still running, when stopped
 	private generation = 0 // incremented whenever the connection is restarted, so that stale requests are ignored.
 
 	constructor(internal: unknown) {
@@ -169,12 +176,19 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		this.roomsLoadedMs = 0
 		this.scriptUpdateProblem = undefined
 		this.warnedAboutNewerScript = undefined
+		this.lastRefreshFailed = false
 		this.tickTimer = setInterval(() => this.tick(), 1000)
 		void this.pollLoop(generation)
 	}
 
 	private stop(): void {
 		this.generation++
+		// Nobody is waiting for what is still on its way from TouchPoint (the results would be ignored anyway), so don't
+		// leave those connections open until they time out.
+		this.requests.abort()
+		this.requests = new AbortController()
+		this.refreshing = undefined
+		this.refreshNext = undefined
 		clearTimeout(this.pollTimer)
 		clearTimeout(this.debounceTimer)
 		clearInterval(this.tickTimer)
@@ -198,15 +212,41 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 			password: this.secrets.password ?? '',
 			scriptName: this.config.scriptName,
 			requestTimeoutMs: this.config.requestTimeoutMs,
+			signal: this.requests.signal,
 		})
 	}
 
+	/**
+	 * How long to wait between refreshes. Undefined if automatic refreshing is off, which is an interval of 0. Anything
+	 * else that isn't a sensible number of seconds is the default, and it is never faster than every 10 seconds.
+	 */
+	private pollDelayMs(): number | undefined {
+		const seconds = Number(this.config.pollIntervalSeconds)
+		if (seconds === 0) return undefined
+
+		return Math.max(MIN_POLL_SECONDS, seconds > 0 ? seconds : DEFAULT_POLL_SECONDS) * 1000
+	}
+
 	private async pollLoop(generation: number): Promise<void> {
+		this.pollTimer = undefined
 		await this.refresh(generation)
 		if (generation !== this.generation) return
 
-		const intervalMs = Math.max(10, this.config.pollIntervalSeconds || 30) * 1000
-		this.pollTimer = setTimeout(() => void this.pollLoop(generation), intervalMs)
+		// When automatic refreshing is off, there is nothing to schedule here: it only ever retries, after a failure.
+		const delayMs = this.pollDelayMs()
+		if (delayMs !== undefined) this.pollTimer = setTimeout(() => void this.pollLoop(generation), delayMs)
+	}
+
+	/**
+	 * With automatic refreshing off, nothing is refreshed unless it is asked for, so a refresh that fails (TouchPoint
+	 * unreachable when the connection starts, say) would leave the connection in an error with nothing to put it right.
+	 * So it tries again until one works. Once things are healthy, it goes back to doing nothing by itself.
+	 */
+	private retryIfAutomaticRefreshIsOff(generation: number): void {
+		if (generation !== this.generation || this.pollDelayMs() !== undefined) return
+		if (!this.lastRefreshFailed || this.pollTimer) return
+
+		this.pollTimer = setTimeout(() => void this.pollLoop(generation), RETRY_WHEN_OFF_MS)
 	}
 
 	private scheduleWindowsRefresh(): void {
@@ -218,7 +258,44 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		}, 500)
 	}
 
+	/**
+	 * Refreshes from TouchPoint, one at a time. A refresh can be asked for by the regular poll, by a feedback being added
+	 * or removed, and by the Refresh action, and nothing stops those coinciding. Overlapping refreshes finish in either
+	 * order, and an older one's answer (given before something the newer one was asked about) can then replace the newer
+	 * one's: a feedback goes off and back on, which can fire a trigger either way, and at startup a quick refresh can run
+	 * before the room list has arrived, or two can both find the script out of date and both upload it.
+	 *
+	 * So while one is running, a request for another is remembered, and one more runs when it is done (so whatever was
+	 * asked for still gets what it needed, such as the reservations of a room that was added meanwhile, and the answers
+	 * are applied in the order the questions were asked). Any number of requests during one refresh become one follow-up.
+	 */
 	private async refresh(generation: number, windowsOnly = false): Promise<void> {
+		if (this.refreshing) {
+			// Needs the room list too if any of what is waiting does.
+			this.refreshNext = { windowsOnly: windowsOnly && (this.refreshNext?.windowsOnly ?? true) }
+			await this.refreshing
+			return
+		}
+
+		// (Everything up to the first await runs at once, so a second request in the same moment sees this one.)
+		const running: Promise<void> = this.refreshThenFollowUps(generation, windowsOnly).finally(() => {
+			if (this.refreshing === running) this.refreshing = undefined
+		})
+		this.refreshing = running
+		await running
+	}
+
+	private async refreshThenFollowUps(generation: number, windowsOnly: boolean): Promise<void> {
+		let next: { windowsOnly: boolean } | undefined = { windowsOnly }
+		while (next) {
+			this.refreshNext = undefined
+			await this.refreshOnce(generation, next.windowsOnly)
+			next = generation === this.generation ? this.refreshNext : undefined // stopped meanwhile: nothing to follow up
+		}
+		this.retryIfAutomaticRefreshIsOff(generation)
+	}
+
+	private async refreshOnce(generation: number, windowsOnly: boolean): Promise<void> {
 		const client = this.buildClient()
 		try {
 			try {
@@ -230,6 +307,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 			}
 		} catch (error) {
 			if (generation !== this.generation) return
+			this.lastRefreshFailed = true
 			// Keep the last known reservations: times keep being applied while TouchPoint is unreachable.
 			const message = error instanceof Error ? error.message : String(error)
 			const kind = error instanceof TouchPointError ? error.kind : 'connection'
@@ -302,6 +380,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		this.windows = result?.windows ?? []
 
 		this.lastRefreshIso = new Date().toISOString()
+		this.lastRefreshFailed = false
 		this.updateStatus(InstanceStatus.Ok)
 		this.warnIfScriptIsNewer(client.newerScriptVersion)
 		this.pushVariableValues()
@@ -324,12 +403,17 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	}
 
 	/** For diagnosing time problems: what TouchPoint's clock said, how it was interpreted, and each reservation found. */
-	private logWindows(windows: RoomWindow[], naiveNowMs: number, offsetMs: number, roomIds: Set<number>): void {
+	private logWindows(
+		windows: RoomWindow[],
+		naiveNowMs: number,
+		offsetMs: number | undefined,
+		roomIds: Set<number>,
+	): void {
 		const iso = (ms: number): string => new Date(ms).toISOString()
 		this.log(
 			'debug',
 			`TouchPoint local time ${iso(naiveNowMs).slice(0, 19)}, this machine (UTC) ${iso(Date.now()).slice(0, 19)}, ` +
-				`LocalTimeZone is UTC${offsetMs >= 0 ? '+' : '-'}${Math.abs(offsetMs) / 3_600_000}h; ` +
+				`LocalTimeZone is ${offsetMs === undefined ? 'of unknown offset' : `UTC${offsetMs >= 0 ? '+' : '-'}${Math.abs(offsetMs) / 3_600_000}h right now`}; ` +
 				`${windows.length} reservation(s) for rooms ${[...roomIds].join(',')}`,
 		)
 		for (const w of windows) {
@@ -356,7 +440,10 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 	private pushVariableValues(): void {
 		const watched = new Set<number>()
-		for (const sub of this.subscriptions.values()) sub.watch.roomIds.forEach((id) => watched.add(id))
+		// The rooms that are actually watched: the ones chosen, and the rooms inside them where that is turned on.
+		for (const sub of this.subscriptions.values()) {
+			for (const id of expandRoomIds(sub.watch, this.rooms)) watched.add(id)
+		}
 
 		this.setVariableValues({
 			rooms_loaded: String(this.rooms.length),

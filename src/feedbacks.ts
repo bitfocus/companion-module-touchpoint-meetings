@@ -99,6 +99,7 @@ export function UpdateFeedbacks(self: ModuleInstance, rooms: Room[]): void {
 			default: 0,
 			min: -MAX_MINUTES,
 			max: MAX_MINUTES,
+			clampValues: true, // an expression's out-of-range result is pulled into range, not rejected
 		},
 		{
 			id: 'minutesAfter',
@@ -108,6 +109,7 @@ export function UpdateFeedbacks(self: ModuleInstance, rooms: Room[]): void {
 			default: 0,
 			min: -MAX_MINUTES,
 			max: MAX_MINUTES,
+			clampValues: true, // an expression's out-of-range result is pulled into range, not rejected
 		},
 	] as const
 

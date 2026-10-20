@@ -57,4 +57,11 @@ describe('the connection settings', () => {
 		const scriptName = GetConfigFields().find((f) => f.id === 'scriptName')
 		expect(scriptName).toMatchObject({ default: basename(SCRIPT_PATH, '.py') })
 	})
+
+	it('let the refresh interval be 0, which turns automatic refreshing off, and say so', () => {
+		const interval = GetConfigFields().find((f) => f.id === 'pollIntervalSeconds')
+
+		expect(interval).toMatchObject({ type: 'number', min: 0, max: 600, default: 30 })
+		expect(interval?.tooltip).toContain('0')
+	})
 })

@@ -16,6 +16,8 @@ const scripts = (name: string) => path.join(repo, 'scripts', name)
 
 const FILES = ['package.json', 'companion/manifest.json', 'touchpoint/CompanionMeetings.py', 'src/scriptSource.ts']
 
+const START_VERSION = '1.5.0'
+
 let project: string
 
 const git = (...args: string[]) => execFileSync('git', args, { cwd: project, encoding: 'utf8' }).trim()
@@ -44,6 +46,9 @@ beforeEach(() => {
 		const text = readFileSync(path.join(repo, file), 'utf8').replace(/\r\n/g, '\n')
 		writeFileSync(path.join(project, file), text)
 	}
+	// Whatever version this repository is at (a release, a pre-release, a version being tried out), the project the
+	// scripts work on starts at a known one, so that what counts as "newer" or "older" than it doesn't depend on that.
+	execFileSync(process.execPath, [scripts('set-version.mjs'), START_VERSION, '--root', project])
 
 	git('init', '-q', '-b', 'main')
 	git('config', 'user.name', 'Test')
@@ -59,7 +64,7 @@ afterEach(() => {
 	rmSync(project, { recursive: true, force: true })
 })
 
-/** The version the project starts at: whatever this repository's is. */
+/** The version the project starts at. */
 const startVersion = () => JSON.parse(read('package.json')).version as string
 
 describe('yarn release (prepares a release)', () => {

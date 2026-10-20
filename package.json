@@ -1,6 +1,6 @@
 {
 	"name": "touchpoint-meetings",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"main": "dist/main.js",
 	"type": "module",
 	"scripts": {
@@ -20,6 +20,7 @@
 		"test:py": "python -m unittest discover -s test/python -v"
 	},
 	"license": "MIT",
+	"author": "Doxology Technologies",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/bitfocus/companion-module-touchpoint-meetings.git"

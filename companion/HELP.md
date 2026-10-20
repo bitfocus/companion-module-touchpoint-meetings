@@ -1,5 +1,7 @@
 ## TouchPoint Meetings
 
+> **Not an official TouchPoint product.** This module is an independent project. It is not developed, endorsed, or supported by TouchPoint Software, Inc. Please report problems with it [on GitHub](https://github.com/bitfocus/companion-module-touchpoint-meetings/issues), not to TouchPoint support.
+
 Lets Companion react to room reservations in TouchPoint. For any room, you can know when it is in **setup**, **in use**, or in **teardown**, and use that to light buttons or to start and stop things through Companion Triggers.
 
 ### How it works
@@ -22,7 +24,7 @@ Cancelled meetings are left out. The script does not look at people, attendance,
 **What it needs.**
 
 - A TouchPoint user for Companion, with the **Developer** and **APIOnly** roles. A dedicated user is strongly recommended, because the Developer role is powerful. If Developer isn't an option for your users, ask TouchPoint support to enable it.
-- TouchPoint's **LocalTimeZone** setting set to your church's time zone. Reservation times are stored in your local time, which can differ from the server's (often Central), and the script uses this setting to tell the module how they relate. Daylight saving time is handled.
+- TouchPoint's **LocalTimeZone** setting set to your church's time zone. Reservation times are stored in your local time, which can differ from the server's (often Central), and the script uses this setting to convert them to real times, following daylight saving time for each reservation's own date.
 
 #### Installing it for the first time
 
@@ -59,7 +61,7 @@ There is only one version number to think about: the module's. The script in Tou
 - **Python Script Name**: `CompanionMeetings`, unless you named it something else.
 - **API Username / Password**: the user created above.
 - **Update the TouchPoint script automatically**: on by default. See _Keeping it up to date_ above.
-- **Refresh Interval**: how often reservations are re-read. Start and end times are applied to the second in between, so a short interval is only needed to pick up reservations that were just changed.
+- **Refresh Interval**: how often reservations are re-read, in seconds. Start and end times are applied to the second in between, so a short interval is only needed to pick up reservations that were just changed. It is never faster than every 10 seconds (1 to 9 count as 10). **Set it to 0 to turn automatic refreshing off**; see below.
 
 You only need one connection, however many rooms you use. Rooms are chosen in each feedback.
 
@@ -82,15 +84,32 @@ Selecting several phases that run into each other, such as setup, event, and tea
 
 ### Starting and stopping things automatically
 
-Use a Companion **Trigger** with the **Room is in setup, in use, or in teardown** feedback as its condition:
+Use a Companion **Trigger**. Under **Condition**, add the feedback **Room is in setup, in use, or in teardown**, with the room and phases you want. Under **Events**, choose:
 
-- _Event start_: the feedback becomes true (phase Event)
-- _Event end_: the feedback becomes false (phase Event)
-- _Setup start / end_ and _Teardown start / end_ work the same way with those phases.
+- **On condition becoming true** to run actions when the phase _starts_, and
+- **On condition becoming false** to run actions when it _ends_.
 
-Because these are conditions rather than one-time events, a reservation that is already underway when Companion starts, or when a trigger is created, is treated correctly.
+**Minutes before** and **Minutes after** on the feedback move those two moments. Because the trigger watches a condition rather than waiting for a one-time event, a reservation that is already underway when Companion starts, or when you create the trigger, is treated correctly.
 
 If TouchPoint becomes unreachable, the last known reservations stay in effect, so times continue to be applied; the connection status shows the problem.
+
+#### Examples
+
+**Turn the projector off 30 minutes after an event ends.** Add **On condition becoming false** as the event. For the condition, choose the room, set **Phases** to **Event (in use)**, and set **Minutes after** to `30`. Add the action that powers off the projector. The condition stays true for 30 minutes after the event ends, so it turns false then. If another reservation starts in that room within the 30 minutes, it simply stays true, and the projector goes off 30 minutes after the last one.
+
+**Turn the projector on 15 minutes before an event starts.** The same, but with **On condition becoming true**, **Minutes before** set to `15`, and the power-on action.
+
+**Run something for the whole booking.** Select **Setup**, **Event (in use)** and **Teardown** together, so the condition is true from the start of setup to the end of teardown. Use one trigger on **On condition becoming true** to turn things on, and another on **On condition becoming false** to turn them off.
+
+**Show the room's status on a button.** Add a preset from **Room Status**, and choose its room in the feedback. To show the meeting's name, add a local variable of type **Feedback** to the button, choose **Name of the meeting using the room**, and use `$(local:name)` (or whatever you called it) in the button text.
+
+### Turning automatic refreshing off
+
+With **Refresh Interval** at 0, the module reads reservations when the connection starts, whenever you add or change a feedback that needs a room's reservations, and when you run the **Refresh from TouchPoint** action, and at no other time. Times it already knows are still applied to the second. So a reservation added or changed in TouchPoint afterwards is not seen until one of those happens, and the reservations it holds only reach about a day ahead.
+
+That suits a setup where you want to decide when TouchPoint is asked, for example a Companion trigger with a **Time interval** event that runs the **Refresh from TouchPoint** action every 10 minutes, or only at the start of the day.
+
+If a refresh fails while automatic refreshing is off (TouchPoint can't be reached when the connection starts, say), the module tries again every 30 seconds until one works, and then goes back to waiting. Otherwise the connection would stay in an error with nothing to put it right.
 
 ### Actions
 

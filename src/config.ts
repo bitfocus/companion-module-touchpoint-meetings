@@ -59,7 +59,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			id: 'autoUpdateScript',
 			label: 'Update the TouchPoint script automatically',
 			tooltip:
-				'When this module has a newer version of the script than the one in TouchPoint, install it over the old one. Requires the script to already be installed once.',
+				'The Python script on TouchPoint can be updated automatically when this module is updated to keep everything working seamlessly. Requires the script to already be installed once.',
 			width: 12,
 			default: true,
 		},
@@ -68,9 +68,9 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			id: 'pollIntervalSeconds',
 			label: 'Refresh Interval (seconds)',
 			tooltip:
-				'How often reservations are re-read from TouchPoint. Start and end times are applied to the second between refreshes.',
+				'How often reservations are re-read from TouchPoint. Set to 0 to disable automatic refreshing (you can use the action to refresh manually). Values from 1 to 9 count as 10.',
 			width: 6,
-			min: 10,
+			min: 0,
 			max: 600,
 			default: 30,
 		},
