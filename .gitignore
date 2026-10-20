@@ -7,3 +7,12 @@ DEBUG-*
 /.yarn
 /.vscode
 __pycache__/
+
+# JetBrains: only the shared code style and inspection settings are committed
+/.idea/deployment.xml
+/.idea/misc.xml
+/.idea/php.xml
+/.idea/watcherTasks.xml
+/.idea/modules.xml
+/.idea/*.iml
+/.idea/workspace.xml
